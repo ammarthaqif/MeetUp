@@ -24,6 +24,25 @@ import { SimulatedInbox, SimulatedEmail } from './components/SimulatedInbox';
 import { Booking, Room, Office } from './types';
 import { formatFriendlyDate } from './utils';
 
+const DEFAULT_INITIAL_OFFICES: Office[] = [
+  {
+    id: 'office-singapore-hq',
+    name: 'Downtown Singapore HQ',
+    location: 'Marina Bay Financial Centre, Tower 2',
+    passkey: 'SG123',
+    floors: [1, 2, 3, 4],
+    createdAt: 1700000000000
+  },
+  {
+    id: 'office-silicon-valley',
+    name: 'West Tech Center (Silicon Valley)',
+    location: '456 Innovation Way, Building 2',
+    passkey: 'SV456',
+    floors: [1, 2],
+    createdAt: 1700000000000
+  }
+];
+
 export default function App() {
   const [selectedDate, setSelectedDate] = useState<string>(() => {
     const today = new Date();
@@ -34,21 +53,29 @@ export default function App() {
   const [capacityFilter, setCapacityFilter] = useState<string>('all');
   const [selectedAmenities, setSelectedAmenities] = useState<string[]>([]);
   
-  // Dynamic Database States
-  const [offices, setOffices] = useState<Office[]>([]);
+  // Dynamic Database States (with instant offline fallback)
+  const [offices, setOffices] = useState<Office[]>(DEFAULT_INITIAL_OFFICES);
   const [rooms, setRooms] = useState<Room[]>([]);
   const [bookings, setBookings] = useState<Booking[]>([]);
   const [isSeeding, setIsSeeding] = useState(false);
 
   // Active Workspace State
   const [activeOffice, setActiveOffice] = useState<Office | null>(() => {
-    const saved = localStorage.getItem('office_sync_active_office');
-    return saved ? JSON.parse(saved) : null;
+    try {
+      const saved = localStorage.getItem('office_sync_active_office');
+      return saved ? JSON.parse(saved) : null;
+    } catch {
+      return null;
+    }
   });
 
   // Admin state
   const [isAdminMode, setIsAdminMode] = useState<boolean>(() => {
-    return localStorage.getItem('office_sync_admin_mode') === 'true';
+    try {
+      return localStorage.getItem('office_sync_admin_mode') === 'true';
+    } catch {
+      return false;
+    }
   });
   const [showAdminModal, setShowAdminModal] = useState(false);
   const [adminPasswordInput, setAdminPasswordInput] = useState('');
@@ -60,8 +87,12 @@ export default function App() {
 
   // Simulated Email Inbox State
   const [simulatedEmails, setSimulatedEmails] = useState<SimulatedEmail[]>(() => {
-    const saved = localStorage.getItem('office_sync_emails');
-    return saved ? JSON.parse(saved) : [];
+    try {
+      const saved = localStorage.getItem('office_sync_emails');
+      return saved ? JSON.parse(saved) : [];
+    } catch {
+      return [];
+    }
   });
 
   // UI notifications
@@ -959,8 +990,8 @@ export default function App() {
                 bookings={currentOfficeBookings}
                 rooms={rooms}
                 currentUserEmail={user?.email || null}
-                onCancelBooking={handleCancelBooking}
-                onSyncGoogleNow={handleSyncGoogleNow}
+                onCancelBooking={(booking) => handleCancelBooking(booking.id)}
+                onSyncGoogleNow={(booking) => handleSyncGoogleNow(booking.id)}
                 googleSyncAvailable={!!googleToken}
               />
 

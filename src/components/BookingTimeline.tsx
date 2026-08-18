@@ -126,10 +126,14 @@ export const BookingTimeline: React.FC<BookingTimelineProps> = ({
                       {/* Tiny quick tags */}
                       <div className="flex gap-1 overflow-hidden mt-0.5">
                         {room.amenities.includes('Video Conferencing') && (
-                          <Video className="w-3 h-3 text-slate-400" title="Video Conferencing" />
+                          <span title="Video Conferencing">
+                            <Video className="w-3 h-3 text-slate-400" />
+                          </span>
                         )}
                         {room.amenities.includes('Dual 85" Screens') && (
-                          <Monitor className="w-3 h-3 text-slate-400" title="Monitor" />
+                          <span title="Monitor">
+                            <Monitor className="w-3 h-3 text-slate-400" />
+                          </span>
                         )}
                       </div>
                     </div>
