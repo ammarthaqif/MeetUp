@@ -1,0 +1,6 @@
+{
+  "name": "Meeting Room Booking System",
+  "description": "A real-time office meeting room booking system across multiple floors, seamlessly syncing with Google Calendar and Outlook.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
