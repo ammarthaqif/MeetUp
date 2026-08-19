@@ -391,7 +391,9 @@ export default function App() {
     setAuditLogs(prev => [newLog, ...prev.slice(0, 499)]);
 
     try {
-      setDoc(doc(db, 'audit_logs', newLog.id), newLog).catch(() => {});
+      if (db) {
+        setDoc(doc(db, 'audit_logs', newLog.id), newLog).catch(() => {});
+      }
     } catch {}
   };
 
@@ -422,6 +424,7 @@ export default function App() {
   // Real-time listen to Offices
   useEffect(() => {
     try {
+      if (!db) return;
       const officesCollection = collection(db, 'offices');
       const unsubscribe = onSnapshot(officesCollection, (snapshot) => {
         if (!snapshot.empty) {
@@ -443,6 +446,7 @@ export default function App() {
   // Real-time listen to Rooms
   useEffect(() => {
     try {
+      if (!db) return;
       const roomsCollection = collection(db, 'rooms');
       const unsubscribe = onSnapshot(roomsCollection, (snapshot) => {
         if (!snapshot.empty) {
@@ -464,6 +468,7 @@ export default function App() {
   // Real-time listen to Bookings
   useEffect(() => {
     try {
+      if (!db) return;
       const bookingsCollection = collection(db, 'bookings');
       const unsubscribe = onSnapshot(bookingsCollection, (snapshot) => {
         if (!snapshot.empty) {
@@ -486,6 +491,7 @@ export default function App() {
   // Real-time listen to Approved Users
   useEffect(() => {
     try {
+      if (!db) return;
       const usersCollection = collection(db, 'approved_users');
       const unsubscribe = onSnapshot(usersCollection, (snapshot) => {
         if (!snapshot.empty) {
@@ -507,6 +513,7 @@ export default function App() {
   // Real-time listen to Access Keys
   useEffect(() => {
     try {
+      if (!db) return;
       const keysCollection = collection(db, 'access_keys');
       const unsubscribe = onSnapshot(keysCollection, (snapshot) => {
         if (!snapshot.empty) {
@@ -528,6 +535,7 @@ export default function App() {
   // Real-time listen to Audit Logs
   useEffect(() => {
     try {
+      if (!db) return;
       const auditCollection = collection(db, 'audit_logs');
       const unsubscribe = onSnapshot(auditCollection, (snapshot) => {
         if (!snapshot.empty) {
@@ -568,6 +576,7 @@ export default function App() {
   // Listen to Auth
   useEffect(() => {
     try {
+      if (!auth) return;
       const unsubscribe = onAuthStateChanged(auth, (currentUser) => {
         setUser(currentUser);
         if (currentUser) {
@@ -677,7 +686,9 @@ export default function App() {
     const updatedKey: AccessKey = { ...matchingKey, usedCount: matchingKey.usedCount + 1 };
     setAccessKeys(prev => prev.map(k => k.id === matchingKey.id ? updatedKey : k));
     try {
-      setDoc(doc(db, 'access_keys', matchingKey.id), updatedKey, { merge: true }).catch(() => {});
+      if (db) {
+        setDoc(doc(db, 'access_keys', matchingKey.id), updatedKey, { merge: true }).catch(() => {});
+      }
     } catch {}
 
     // Add to verified tokens
@@ -749,7 +760,9 @@ export default function App() {
         createdBookings.push(docPayload);
 
         try {
-          addDoc(collection(db, 'bookings'), docPayload).catch(() => {});
+          if (db) {
+            addDoc(collection(db, 'bookings'), docPayload).catch(() => {});
+          }
         } catch {}
 
         // Audit Trail
@@ -829,7 +842,9 @@ export default function App() {
 
         setBookings(prev => prev.map(b => b.id === bookingData.id ? { ...b, ...docPayload } : b));
         try {
-          setDoc(doc(db, 'bookings', bookingData.id), docPayload, { merge: true }).catch(() => {});
+          if (db) {
+            setDoc(doc(db, 'bookings', bookingData.id), docPayload, { merge: true }).catch(() => {});
+          }
         } catch {}
 
         logActivity({
@@ -868,7 +883,9 @@ export default function App() {
       } else {
         setBookings(prev => [docPayload, ...prev]);
         try {
-          addDoc(collection(db, 'bookings'), docPayload).catch(() => {});
+          if (db) {
+            addDoc(collection(db, 'bookings'), docPayload).catch(() => {});
+          }
         } catch {}
 
         logActivity({
@@ -932,7 +949,9 @@ export default function App() {
     setBookings(prev => prev.filter(b => b.id !== bookingId));
 
     try {
-      deleteDoc(doc(db, 'bookings', bookingId)).catch(() => {});
+      if (db) {
+        deleteDoc(doc(db, 'bookings', bookingId)).catch(() => {});
+      }
     } catch {}
 
     logActivity({
@@ -1026,7 +1045,9 @@ export default function App() {
     });
 
     try {
-      setDoc(doc(db, 'offices', id), newOffice, { merge: true }).catch(() => {});
+      if (db) {
+        setDoc(doc(db, 'offices', id), newOffice, { merge: true }).catch(() => {});
+      }
     } catch {}
 
     logActivity({
@@ -1044,7 +1065,9 @@ export default function App() {
     setBookings(prev => prev.filter(b => b.officeId !== officeId));
 
     try {
-      deleteDoc(doc(db, 'offices', officeId)).catch(() => {});
+      if (db) {
+        deleteDoc(doc(db, 'offices', officeId)).catch(() => {});
+      }
     } catch {}
 
     if (activeOffice?.id === officeId) {
@@ -1072,7 +1095,9 @@ export default function App() {
     });
 
     try {
-      setDoc(doc(db, 'rooms', roomData.id), roomData, { merge: true }).catch(() => {});
+      if (db) {
+        setDoc(doc(db, 'rooms', roomData.id), roomData, { merge: true }).catch(() => {});
+      }
     } catch {}
 
     logActivity({
@@ -1091,7 +1116,9 @@ export default function App() {
     setBookings(prev => prev.filter(b => b.roomId !== roomId));
 
     try {
-      deleteDoc(doc(db, 'rooms', roomId)).catch(() => {});
+      if (db) {
+        deleteDoc(doc(db, 'rooms', roomId)).catch(() => {});
+      }
     } catch {}
 
     logActivity({
@@ -1118,7 +1145,9 @@ export default function App() {
 
     setApprovedUsers(prev => [newUser, ...prev]);
     try {
-      setDoc(doc(db, 'approved_users', id), newUser).catch(() => {});
+      if (db) {
+        setDoc(doc(db, 'approved_users', id), newUser).catch(() => {});
+      }
     } catch {}
 
     logActivity({
@@ -1143,7 +1172,9 @@ export default function App() {
         };
         newItems.push(u);
         try {
-          setDoc(doc(db, 'approved_users', id), u).catch(() => {});
+          if (db) {
+            setDoc(doc(db, 'approved_users', id), u).catch(() => {});
+          }
         } catch {}
         addedCount++;
       }
@@ -1165,7 +1196,9 @@ export default function App() {
     setApprovedUsers(prev => prev.filter(u => u.id !== userId));
 
     try {
-      deleteDoc(doc(db, 'approved_users', userId)).catch(() => {});
+      if (db) {
+        deleteDoc(doc(db, 'approved_users', userId)).catch(() => {});
+      }
     } catch {}
 
     if (target) {
@@ -1199,7 +1232,9 @@ export default function App() {
 
     setAccessKeys(prev => [newKey, ...prev]);
     try {
-      setDoc(doc(db, 'access_keys', id), newKey).catch(() => {});
+      if (db) {
+        setDoc(doc(db, 'access_keys', id), newKey).catch(() => {});
+      }
     } catch {}
 
     logActivity({
@@ -1218,7 +1253,9 @@ export default function App() {
     setAccessKeys(prev => prev.map(k => k.id === keyId ? updated : k));
 
     try {
-      setDoc(doc(db, 'access_keys', keyId), updated, { merge: true }).catch(() => {});
+      if (db) {
+        setDoc(doc(db, 'access_keys', keyId), updated, { merge: true }).catch(() => {});
+      }
     } catch {}
 
     logActivity({
@@ -1232,7 +1269,9 @@ export default function App() {
     setAccessKeys(prev => prev.filter(k => k.id !== keyId));
 
     try {
-      deleteDoc(doc(db, 'access_keys', keyId)).catch(() => {});
+      if (db) {
+        deleteDoc(doc(db, 'access_keys', keyId)).catch(() => {});
+      }
     } catch {}
 
     if (target) {

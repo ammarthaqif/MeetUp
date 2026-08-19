@@ -1,17 +1,58 @@
-import { initializeApp } from 'firebase/app';
-import { getAuth, signInWithPopup, GoogleAuthProvider, onAuthStateChanged, User } from 'firebase/auth';
-import { getFirestore } from 'firebase/firestore';
-import firebaseConfig from '../firebase-applet-config.json';
+import { initializeApp, getApps, FirebaseApp } from 'firebase/app';
+import { getAuth, signInWithPopup, GoogleAuthProvider, onAuthStateChanged, User, Auth } from 'firebase/auth';
+import { getFirestore, Firestore } from 'firebase/firestore';
 
-// Initialize Firebase
-const app = initializeApp(firebaseConfig);
-export const auth = getAuth(app);
-export const db = getFirestore(app);
+// Default configuration with safe fallback
+let firebaseConfig: any = {
+  projectId: "gen-lang-client-0129060777",
+  appId: "1:365252719463:web:73eaa8ef18bf0bdc2af5c2",
+  apiKey: "AIzaSyDGF93g0Lkz5QXpFAWNORQbxICBddVV3eU",
+  authDomain: "gen-lang-client-0129060777.firebaseapp.com",
+  storageBucket: "gen-lang-client-0129060777.firebasestorage.app",
+  messagingSenderId: "365252719463"
+};
+
+try {
+  // eslint-disable-next-line @typescript-eslint/no-var-requires
+  const importedConfig = require('../firebase-applet-config.json');
+  if (importedConfig && importedConfig.apiKey) {
+    firebaseConfig = importedConfig;
+  }
+} catch {
+  // Config json fallback
+}
+
+// Safely initialize Firebase app and services
+let app: FirebaseApp | null = null;
+let authInstance: Auth | null = null;
+let dbInstance: Firestore | null = null;
+
+try {
+  const existingApps = getApps();
+  if (existingApps.length > 0) {
+    app = existingApps[0];
+  } else if (firebaseConfig && firebaseConfig.apiKey) {
+    app = initializeApp(firebaseConfig);
+  }
+  if (app) {
+    authInstance = getAuth(app);
+    dbInstance = getFirestore(app);
+  }
+} catch (error) {
+  console.warn('Firebase initialization warning (falling back to local memory mode):', error);
+}
+
+export const auth = authInstance;
+export const db = dbInstance;
 
 // Configure Google Auth Provider with Google Calendar scopes
 export const provider = new GoogleAuthProvider();
-provider.addScope('https://www.googleapis.com/auth/calendar');
-provider.addScope('https://www.googleapis.com/auth/calendar.events');
+try {
+  provider.addScope('https://www.googleapis.com/auth/calendar');
+  provider.addScope('https://www.googleapis.com/auth/calendar.events');
+} catch (e) {
+  console.warn('Provider scopes warning:', e);
+}
 
 // In-memory token storage (Do NOT persist to localStorage/sessionStorage)
 let cachedAccessToken: string | null = null;
@@ -22,11 +63,12 @@ export const initAuth = (
   onAuthSuccess?: (user: User, token: string | null) => void,
   onAuthFailure?: () => void
 ) => {
+  if (!auth) {
+    if (onAuthFailure) onAuthFailure();
+    return () => {};
+  }
   return onAuthStateChanged(auth, async (user: User | null) => {
     if (user) {
-      // In the real world, the cached access token might expire, or be lost on reload.
-      // But we keep it in memory. If we don't have it (e.g. page refreshed), the client
-      // can prompt googleSignIn again or retrieve a fresh credentials flow if available.
       if (onAuthSuccess) {
         onAuthSuccess(user, cachedAccessToken);
       }
@@ -41,6 +83,9 @@ export const initAuth = (
 
 // Initiate Google Sign-In with Popup
 export const googleSignIn = async (): Promise<{ user: User; accessToken: string } | null> => {
+  if (!auth) {
+    throw new Error('Firebase Auth is not available in offline preview mode.');
+  }
   try {
     isSigningIn = true;
     const result = await signInWithPopup(auth, provider);
@@ -72,6 +117,8 @@ export const setCachedAccessToken = (token: string | null) => {
 
 // Log out from application
 export const logout = async () => {
-  await auth.signOut();
+  if (auth) {
+    await auth.signOut();
+  }
   cachedAccessToken = null;
 };
