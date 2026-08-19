@@ -2,11 +2,12 @@ import React, { useState } from 'react';
 import { 
   Building2, Plus, Trash2, Edit3, X, HelpCircle, Check, 
   Settings, Users, Shield, MapPin, Key, Layers, ChevronDown, 
-  ShieldCheck, History 
+  ShieldCheck, History, Download, FileSpreadsheet, FileText
 } from 'lucide-react';
 import { Office, Room, Booking, ApprovedUser, AccessKey, AuditLog } from '../types';
 import { AdminAccessControl } from './AdminAccessControl';
 import { AdminAuditLogs } from './AdminAuditLogs';
+import { timeToMinutes } from '../utils';
 
 interface AdminPanelProps {
   offices: Office[];
@@ -245,6 +246,81 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
     } catch (err: any) {
       triggerNotification('error', err.message || 'Failed to delete room.');
     }
+  };
+
+  // --- CSV REPORT EXPORT FUNCTIONALITY ---
+  const handleExportBookingsCSV = () => {
+    if (bookings.length === 0) {
+      triggerNotification('error', 'No bookings available to export.');
+      return;
+    }
+
+    const headers = [
+      'Booking ID',
+      'Office / Building',
+      'Room Name',
+      'Floor Level',
+      'Meeting Title',
+      'Date',
+      'Start Time',
+      'End Time',
+      'Duration (mins)',
+      'Organizer Name',
+      'Organizer Email',
+      'Attendees Count',
+      'Attendees List',
+      'Description',
+      'Google Sync',
+      'Created Date'
+    ];
+
+    const escapeCSV = (val: any) => {
+      if (val === null || val === undefined) return '""';
+      const str = String(val).replace(/"/g, '""');
+      return `"${str}"`;
+    };
+
+    const rows = bookings.map(b => {
+      const room = rooms.find(r => r.id === b.roomId);
+      const office = offices.find(o => o.id === (b.officeId || room?.officeId));
+      
+      const startM = timeToMinutes(b.startTime);
+      const endM = timeToMinutes(b.endTime);
+      const duration = endM > startM ? endM - startM : 60;
+
+      return [
+        escapeCSV(b.id),
+        escapeCSV(office ? office.name : 'Unknown Office'),
+        escapeCSV(room ? room.name : 'Unknown Room'),
+        escapeCSV(b.floor || room?.floor || 1),
+        escapeCSV(b.title),
+        escapeCSV(b.date),
+        escapeCSV(b.startTime),
+        escapeCSV(b.endTime),
+        escapeCSV(duration),
+        escapeCSV(b.hostName),
+        escapeCSV(b.hostEmail),
+        escapeCSV(b.attendees ? b.attendees.length : 0),
+        escapeCSV(b.attendees ? b.attendees.join('; ') : ''),
+        escapeCSV(b.description || ''),
+        escapeCSV(b.googleEventId ? 'Yes' : 'No'),
+        escapeCSV(b.createdAt ? new Date(b.createdAt).toISOString() : '')
+      ].join(',');
+    });
+
+    const csvContent = [headers.join(','), ...rows].join('\r\n');
+    const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    const dateStr = new Date().toISOString().split('T')[0];
+    link.setAttribute('href', url);
+    link.setAttribute('download', `corporate_room_bookings_report_${dateStr}.csv`);
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    URL.revokeObjectURL(url);
+
+    triggerNotification('success', `Exported ${bookings.length} reservations to CSV successfully.`);
   };
 
   return (
@@ -760,11 +836,30 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
       {/* --- TAB 3: RESERVATIONS SYSTEM-WIDE --- */}
       {activeTab === 'bookings' && (
         <div className="space-y-4">
-          <div className="flex items-center justify-between">
-            <h3 className="text-xs font-bold font-mono text-slate-400 uppercase tracking-wider">
-              All Active Reservations Across All Offices ({bookings.length})
-            </h3>
-            <p className="text-[10px] text-slate-500">Admins have authority to cancel any staff booking</p>
+          <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 bg-slate-850 p-4 rounded-2xl border border-slate-800">
+            <div>
+              <h3 className="text-xs font-bold font-mono text-slate-300 uppercase tracking-wider flex items-center gap-2">
+                <span>All Active Reservations Across All Offices</span>
+                <span className="bg-indigo-900/60 text-indigo-300 text-[10px] px-2 py-0.5 rounded-full border border-indigo-700">
+                  {bookings.length} {bookings.length === 1 ? 'Booking' : 'Bookings'}
+                </span>
+              </h3>
+              <p className="text-[10px] text-slate-400 mt-0.5">
+                Centralized ledger with direct CSV audit exporting and administrative cancellation authority.
+              </p>
+            </div>
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                onClick={handleExportBookingsCSV}
+                disabled={bookings.length === 0}
+                className="bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 disabled:pointer-events-none text-white font-bold px-3.5 py-2 rounded-xl text-xs flex items-center gap-2 transition-all shadow-md shadow-emerald-950 cursor-pointer"
+                title="Export all reservations to CSV spreadsheet"
+              >
+                <FileSpreadsheet className="w-4 h-4" />
+                <span>Export Bookings to CSV</span>
+              </button>
+            </div>
           </div>
 
           {bookings.length === 0 ? (

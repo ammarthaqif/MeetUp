@@ -20,6 +20,8 @@ import { WeeklyScheduleView } from './components/WeeklyScheduleView';
 import { MonthlyAvailabilityView } from './components/MonthlyAvailabilityView';
 import { BookingModal } from './components/BookingModal';
 import { BookingAuthModal } from './components/BookingAuthModal';
+import { RoomFinderModal } from './components/RoomFinderModal';
+import { InteractiveFloorPlan } from './components/InteractiveFloorPlan';
 import { MyBookings } from './components/MyBookings';
 import { AdminPanel } from './components/AdminPanel';
 import { SimulatedInbox, SimulatedEmail } from './components/SimulatedInbox';
@@ -284,15 +286,17 @@ export default function App() {
   const [isLoggingIn, setIsLoggingIn] = useState(false);
   const [googleToken, setGoogleToken] = useState<string | null>(null);
 
-  // View mode switcher: 'day' | 'week' | 'month'
-  const [viewMode, setViewMode] = useState<'day' | 'week' | 'month'>('day');
+  // View mode switcher: 'day' | 'week' | 'month' | 'floorplan'
+  const [viewMode, setViewMode] = useState<'day' | 'week' | 'month' | 'floorplan'>('day');
 
   // Modal actions
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [isAuthModalOpen, setIsAuthModalOpen] = useState(false);
-  const [pendingBookingIntent, setPendingBookingIntent] = useState<{ room: Room; hour?: string | null; date?: string } | null>(null);
+  const [isRoomFinderOpen, setIsRoomFinderOpen] = useState(false);
+  const [pendingBookingIntent, setPendingBookingIntent] = useState<{ room: Room; hour?: string | null; date?: string; endTime?: string } | null>(null);
   const [selectedRoomForModal, setSelectedRoomForModal] = useState<Room | null>(null);
   const [selectedHourForModal, setSelectedHourForModal] = useState<string | null>(null);
+  const [selectedEndTimeForModal, setSelectedEndTimeForModal] = useState<string | undefined>(undefined);
   const [editingBooking, setEditingBooking] = useState<Booking | null>(null);
 
   const showNotification = (type: 'success' | 'error' | 'info', message: string) => {
@@ -1295,6 +1299,7 @@ export default function App() {
     }
     setSelectedRoomForModal(room);
     setSelectedHourForModal(null);
+    setSelectedEndTimeForModal(undefined);
     setEditingBooking(null);
     setIsModalOpen(true);
   };
@@ -1308,6 +1313,7 @@ export default function App() {
     }
     setSelectedRoomForModal(room);
     setSelectedHourForModal(hour);
+    setSelectedEndTimeForModal(undefined);
     if (customDate) {
       setSelectedDate(customDate);
     }
@@ -1320,7 +1326,23 @@ export default function App() {
     if (!room) return;
     setSelectedRoomForModal(room);
     setSelectedHourForModal(null);
+    setSelectedEndTimeForModal(undefined);
     setEditingBooking(booking);
+    setIsModalOpen(true);
+  };
+
+  const handleProceedWithBookingFromFinder = (room: Room, date: string, start: string, end: string) => {
+    if (!isUserAuthorizedToBook()) {
+      setPendingBookingIntent({ room, hour: start, date, endTime: end });
+      setIsAuthModalOpen(true);
+      return;
+    }
+
+    setSelectedRoomForModal(room);
+    setSelectedDate(date);
+    setSelectedHourForModal(start);
+    setSelectedEndTimeForModal(end);
+    setEditingBooking(null);
     setIsModalOpen(true);
   };
 
@@ -1367,6 +1389,7 @@ export default function App() {
         isAdminMode={isAdminMode}
         onOpenAdminAuth={handleOpenAdminConsole}
         onExitAdminMode={handleExitAdminMode}
+        onOpenRoomFinder={() => setIsRoomFinderOpen(true)}
         adminEmail={ADMIN_EMAIL}
       />
 
@@ -1517,6 +1540,18 @@ export default function App() {
                   <Calendar className="w-3.5 h-3.5" />
                   <span>Monthly View</span>
                 </button>
+                <button
+                  type="button"
+                  onClick={() => setViewMode('floorplan')}
+                  className={`flex items-center gap-1 px-3 py-1.5 text-xs font-bold rounded-md transition-all cursor-pointer ${
+                    viewMode === 'floorplan'
+                      ? 'bg-white text-indigo-600 shadow-2xs ring-1 ring-slate-200'
+                      : 'text-slate-600 hover:text-slate-900'
+                  }`}
+                >
+                  <Building2 className="w-3.5 h-3.5" />
+                  <span>SVG Floor Plan</span>
+                </button>
               </div>
 
               {/* Date picker */}
@@ -1529,6 +1564,16 @@ export default function App() {
                   className="bg-transparent text-slate-800 font-bold focus:outline-none cursor-pointer"
                 />
               </div>
+
+              {/* Smart Room Finder Quick Launcher Button */}
+              <button
+                type="button"
+                onClick={() => setIsRoomFinderOpen(true)}
+                className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-bold rounded-lg bg-indigo-600 hover:bg-indigo-700 text-white shadow-2xs transition-all cursor-pointer"
+              >
+                <Sparkles className="w-3.5 h-3.5 text-amber-300 fill-amber-300" />
+                <span>Smart Room Finder</span>
+              </button>
 
             </div>
           </div>
@@ -1696,6 +1741,19 @@ export default function App() {
                 />
               )}
 
+              {/* Interactive SVG Floor Plan View */}
+              {viewMode === 'floorplan' && (
+                <InteractiveFloorPlan
+                  rooms={currentOfficeRooms}
+                  bookings={currentOfficeBookings}
+                  currentFloor={selectedFloor}
+                  selectedDate={selectedDate}
+                  onSelectRoom={(room, hour) => handleTimelineCellClick(room, hour || '09:00')}
+                  onFloorChange={setSelectedFloor}
+                  availableFloors={activeOffice.floors}
+                />
+              )}
+
               {/* My Personal Reservations */}
               <MyBookings
                 bookings={currentOfficeBookings}
@@ -1716,17 +1774,32 @@ export default function App() {
       {/* Floating Modal for making / editing a reservation */}
       <BookingModal
         isOpen={isModalOpen}
-        onClose={() => setIsModalOpen(false)}
+        onClose={() => {
+          setIsModalOpen(false);
+          setSelectedEndTimeForModal(undefined);
+        }}
         room={selectedRoomForModal}
         rooms={currentOfficeRooms}
         selectedDate={selectedDate}
         selectedHour={selectedHourForModal}
+        selectedEndTime={selectedEndTimeForModal}
         onSave={handleSaveBooking}
         editingBooking={editingBooking}
         currentUser={user ? { displayName: user.displayName, email: user.email, uid: user.uid } : null}
         bookings={currentOfficeBookings}
         googleSyncAvailable={!!googleToken}
         adminEmail={ADMIN_EMAIL}
+      />
+
+      {/* Smart Room Finder Modal (Recommend earliest available date or instant check for defined date) */}
+      <RoomFinderModal
+        isOpen={isRoomFinderOpen}
+        onClose={() => setIsRoomFinderOpen(false)}
+        rooms={currentOfficeRooms}
+        bookings={currentOfficeBookings}
+        currentFloor={selectedFloor}
+        initialDate={selectedDate}
+        onProceedWithBooking={handleProceedWithBookingFromFinder}
       />
 
       {/* Booking Authorization Gate Modal (for unapproved / token users) */}

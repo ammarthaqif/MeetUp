@@ -1,5 +1,8 @@
 import React, { useState, useEffect } from 'react';
-import { X, Calendar, Clock, Info, UserCheck, AlertTriangle, Users, Mail, Plus, Trash2, Lock, ShieldCheck } from 'lucide-react';
+import { 
+  X, Calendar, Clock, Info, UserCheck, AlertTriangle, Users, Mail, Plus, Trash2, 
+  Lock, ShieldCheck, ShieldAlert, Layers, Sparkles, ArrowRight, CheckCircle2 
+} from 'lucide-react';
 import { Room, Booking } from '../types';
 import { isRoomAvailable, timeToMinutes, minutesToTime } from '../utils';
 
@@ -10,6 +13,7 @@ interface BookingModalProps {
   rooms: Room[]; // List of all rooms for selection
   selectedDate: string;
   selectedHour?: string;
+  selectedEndTime?: string;
   onSave: (bookingData: Omit<Booking, 'id' | 'createdAt'> & { id?: string; multiDates?: string[] }) => Promise<void>;
   editingBooking: Booking | null;
   currentUser: { displayName: string | null; email: string | null; uid: string } | null;
@@ -25,6 +29,7 @@ export const BookingModal: React.FC<BookingModalProps> = ({
   rooms,
   selectedDate,
   selectedHour = '09:00',
+  selectedEndTime,
   onSave,
   editingBooking,
   currentUser,
@@ -48,6 +53,11 @@ export const BookingModal: React.FC<BookingModalProps> = ({
   const [errorMessage, setErrorMessage] = useState('');
   const [isConflict, setIsConflict] = useState(false);
 
+  // Overlap and Floor Collision Diagnostics
+  const [directCollisions, setDirectCollisions] = useState<Booking[]>([]);
+  const [floorConcurrentBookings, setFloorConcurrentBookings] = useState<{ booking: Booking; room: Room }[]>([]);
+  const [alternativeAvailableRoomsOnFloor, setAlternativeAvailableRoomsOnFloor] = useState<Room[]>([]);
+
   // Ownership check: user can only edit/cancel if they are the creator or the verified admin
   const isOwner = !editingBooking || (
     (currentUser && (
@@ -57,12 +67,11 @@ export const BookingModal: React.FC<BookingModalProps> = ({
     (currentUser?.email?.toLowerCase() === adminEmail.toLowerCase())
   );
 
-
   // Multi-day states
   const [isMultiDay, setIsMultiDay] = useState(false);
   const [endDate, setEndDate] = useState('');
   const [repeatDays, setRepeatDays] = useState<string[]>([]);
-  const [multiDayConflicts, setMultiDayConflicts] = useState<string[]>([]);
+  const [multiDayConflicts, setMultiDayConflicts] = useState<{ date: string; bookings: Booking[] }[]>([]);
 
   const DAYS_OF_WEEK = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'];
 
@@ -90,9 +99,13 @@ export const BookingModal: React.FC<BookingModalProps> = ({
         setRoomId(room?.id || rooms[0]?.id || '');
         setDate(selectedDate);
         setStartTime(selectedHour);
-        // Default end time to 1 hour after start time
-        const startMin = timeToMinutes(selectedHour);
-        setEndTime(minutesToTime(startMin + 60));
+        // Default end time to selectedEndTime if provided, else 1 hour after start time
+        if (selectedEndTime) {
+          setEndTime(selectedEndTime);
+        } else {
+          const startMin = timeToMinutes(selectedHour);
+          setEndTime(minutesToTime(startMin + 60));
+        }
         setTitle('');
         setDescription('');
         setHostName(currentUser?.displayName || '');
@@ -108,7 +121,7 @@ export const BookingModal: React.FC<BookingModalProps> = ({
         setMultiDayConflicts([]);
       }
     }
-  }, [isOpen, room, selectedDate, selectedHour, editingBooking, currentUser, rooms, googleSyncAvailable]);
+  }, [isOpen, room, selectedDate, selectedHour, selectedEndTime, editingBooking, currentUser, rooms, googleSyncAvailable]);
 
   // Live conflict checking when dates, times, or rooms change
   useEffect(() => {
@@ -120,9 +133,52 @@ export const BookingModal: React.FC<BookingModalProps> = ({
     if (endMin <= startMin) {
       setErrorMessage('End time must be after the start time.');
       setIsConflict(false);
+      setDirectCollisions([]);
+      setFloorConcurrentBookings([]);
+      setAlternativeAvailableRoomsOnFloor([]);
       return;
     } else {
       setErrorMessage('');
+    }
+
+    const selectedRoomObj = rooms.find(r => r.id === roomId);
+    const currentFloor = selectedRoomObj?.floor;
+
+    // Check same-floor concurrent bookings for awareness
+    if (currentFloor) {
+      const sameFloorRooms = rooms.filter(r => r.floor === currentFloor && r.id !== roomId);
+      const floorCollisions: { booking: Booking; room: Room }[] = [];
+      const alternativeRooms: Room[] = [];
+
+      sameFloorRooms.forEach(fRoom => {
+        const isFree = isRoomAvailable(
+          fRoom.id,
+          date,
+          startTime,
+          endTime,
+          bookings,
+          editingBooking?.id
+        );
+        if (isFree) {
+          alternativeRooms.push(fRoom);
+        } else {
+          // Find the active booking in that room
+          const overlappingB = bookings.find(b => {
+            if (editingBooking && b.id === editingBooking.id) return false;
+            if (b.roomId !== fRoom.id) return false;
+            if (b.date !== date) return false;
+            const bStart = timeToMinutes(b.startTime);
+            const bEnd = timeToMinutes(b.endTime);
+            return Math.max(startMin, bStart) < Math.min(endMin, bEnd);
+          });
+          if (overlappingB) {
+            floorCollisions.push({ booking: overlappingB, room: fRoom });
+          }
+        }
+      });
+
+      setFloorConcurrentBookings(floorCollisions);
+      setAlternativeAvailableRoomsOnFloor(alternativeRooms);
     }
 
     if (isMultiDay && endDate && !editingBooking) {
@@ -140,35 +196,40 @@ export const BookingModal: React.FC<BookingModalProps> = ({
         }
       }
 
-      const conflicts: string[] = [];
+      const multiConflicts: { date: string; bookings: Booking[] }[] = [];
       for (const d of datesToCheck) {
-        const available = isRoomAvailable(
-          roomId,
-          d,
-          startTime,
-          endTime,
-          bookings,
-          editingBooking?.id
-        );
-        if (!available) {
-          conflicts.push(d);
+        const overlappingList = bookings.filter(b => {
+          if (editingBooking && b.id === editingBooking.id) return false;
+          if (b.roomId !== roomId) return false;
+          if (b.date !== d) return false;
+          const bStart = timeToMinutes(b.startTime);
+          const bEnd = timeToMinutes(b.endTime);
+          return Math.max(startMin, bStart) < Math.min(endMin, bEnd);
+        });
+
+        if (overlappingList.length > 0) {
+          multiConflicts.push({ date: d, bookings: overlappingList });
         }
       }
-      setMultiDayConflicts(conflicts);
-      setIsConflict(conflicts.length > 0);
+      setMultiDayConflicts(multiConflicts);
+      setIsConflict(multiConflicts.length > 0);
+      setDirectCollisions(multiConflicts[0]?.bookings || []);
     } else {
-      const hasConflict = !isRoomAvailable(
-        roomId,
-        date,
-        startTime,
-        endTime,
-        bookings,
-        editingBooking?.id
-      );
-      setIsConflict(hasConflict);
+      // Find all overlapping bookings for this exact room
+      const collisions = bookings.filter(b => {
+        if (editingBooking && b.id === editingBooking.id) return false;
+        if (b.roomId !== roomId) return false;
+        if (b.date !== date) return false;
+        const bStart = timeToMinutes(b.startTime);
+        const bEnd = timeToMinutes(b.endTime);
+        return Math.max(startMin, bStart) < Math.min(endMin, bEnd);
+      });
+
+      setDirectCollisions(collisions);
+      setIsConflict(collisions.length > 0);
       setMultiDayConflicts([]);
     }
-  }, [roomId, date, startTime, endTime, bookings, editingBooking, isMultiDay, endDate, repeatDays]);
+  }, [roomId, date, startTime, endTime, bookings, editingBooking, isMultiDay, endDate, repeatDays, rooms]);
 
   if (!isOpen) return null;
 
@@ -370,24 +431,113 @@ export const BookingModal: React.FC<BookingModalProps> = ({
             </div>
           )}
 
-          {isConflict && !isMultiDay && (
-            <div className="p-3 bg-amber-50 border border-amber-200 text-amber-700 text-xs rounded-xl flex items-center gap-2">
-              <AlertTriangle className="w-4 h-4 shrink-0" />
-              <div>
-                <span className="font-bold">Time Slot Conflict:</span> The room is already booked for this period. Please select a different room, date, or time.
+          {/* VISUAL OVERLAP & CONFLICT WARNING SYSTEM */}
+          {isConflict && !isMultiDay && directCollisions.length > 0 && (
+            <div className="p-4 bg-gradient-to-br from-rose-50 to-amber-50 border-2 border-rose-300/80 text-rose-950 rounded-2xl shadow-xs space-y-3 animate-in fade-in zoom-in-95 duration-200">
+              <div className="flex items-start justify-between gap-2">
+                <div className="flex items-center gap-2">
+                  <span className="relative flex h-3 w-3">
+                    <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-rose-400 opacity-75"></span>
+                    <span className="relative inline-flex rounded-full h-3 w-3 bg-rose-600"></span>
+                  </span>
+                  <span className="text-xs font-black text-rose-900 tracking-tight uppercase flex items-center gap-1.5 font-mono">
+                    <ShieldAlert className="w-4 h-4 text-rose-600 shrink-0" />
+                    Direct Room Booking Conflict
+                  </span>
+                </div>
+                <span className="text-[10px] font-mono bg-rose-200 text-rose-900 px-2 py-0.5 rounded-full font-bold">
+                  {directCollisions.length} {directCollisions.length === 1 ? 'Collision' : 'Collisions'}
+                </span>
+              </div>
+
+              {/* Conflicting Booking Details */}
+              <div className="space-y-2">
+                {directCollisions.map((collision) => (
+                  <div 
+                    key={collision.id} 
+                    className="p-2.5 bg-white/90 rounded-xl border border-rose-200 text-xs shadow-2xs space-y-1"
+                  >
+                    <div className="flex items-center justify-between font-bold text-slate-800">
+                      <span className="truncate max-w-[240px] text-rose-950 font-sans">
+                        "{collision.title || 'Reserved Meeting'}"
+                      </span>
+                      <span className="font-mono text-[11px] bg-rose-100 text-rose-800 px-2 py-0.5 rounded font-bold">
+                        {collision.startTime} - {collision.endTime}
+                      </span>
+                    </div>
+                    <div className="text-[11px] text-slate-500 flex items-center justify-between">
+                      <span>Host: <strong className="text-slate-700">{collision.hostName || collision.hostEmail}</strong></span>
+                      <span className="text-[10px] text-slate-400 font-mono">Lvl {collision.floor}</span>
+                    </div>
+                  </div>
+                ))}
+              </div>
+
+              {/* Smart Alternative Rooms on the Same Floor */}
+              {alternativeAvailableRoomsOnFloor.length > 0 && (
+                <div className="pt-1 border-t border-rose-200/60">
+                  <div className="text-[10px] font-bold uppercase tracking-wider text-rose-800 font-mono mb-1.5 flex items-center gap-1">
+                    <Sparkles className="w-3 h-3 text-amber-600" />
+                    Available Alternative Spaces on Level {currentRoom?.floor}:
+                  </div>
+                  <div className="flex flex-wrap gap-1.5">
+                    {alternativeAvailableRoomsOnFloor.map((altRoom) => (
+                      <button
+                        type="button"
+                        key={altRoom.id}
+                        onClick={() => {
+                          setRoomId(altRoom.id);
+                        }}
+                        className="px-2.5 py-1 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg text-xs font-bold transition-all shadow-2xs cursor-pointer flex items-center gap-1"
+                      >
+                        <CheckCircle2 className="w-3 h-3" />
+                        <span>Switch to {altRoom.name}</span>
+                        <span className="text-[10px] opacity-80">({altRoom.capacity} pax)</span>
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* Multi-Day Recurrence Conflict Warning */}
+          {isConflict && isMultiDay && multiDayConflicts.length > 0 && (
+            <div className="p-4 bg-gradient-to-br from-rose-50 to-amber-50 border-2 border-rose-300 text-rose-950 rounded-2xl shadow-xs space-y-2.5 animate-in fade-in zoom-in-95 duration-200">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-2 font-bold text-xs text-rose-900 font-mono uppercase">
+                  <AlertTriangle className="w-4 h-4 text-rose-600 shrink-0" />
+                  <span>Recurring Multi-Day Conflicts ({multiDayConflicts.length} dates)</span>
+                </div>
+              </div>
+              <p className="text-[11px] text-rose-800 leading-relaxed">
+                This space is already occupied for the requested time slot on the following dates:
+              </p>
+              <div className="flex flex-wrap gap-1.5 pt-1">
+                {multiDayConflicts.map((c) => (
+                  <span 
+                    key={c.date} 
+                    className="text-[11px] bg-rose-200/90 text-rose-900 border border-rose-300 px-2 py-0.5 rounded-md font-mono font-bold"
+                  >
+                    {c.date} ({c.bookings[0]?.startTime} - {c.bookings[0]?.endTime})
+                  </span>
+                ))}
               </div>
             </div>
           )}
 
-          {isConflict && isMultiDay && (
-            <div className="p-3 bg-rose-50 border border-rose-200 text-rose-800 text-xs rounded-xl flex flex-col gap-1.5">
-              <div className="flex items-center gap-2 font-bold">
-                <AlertTriangle className="w-4 h-4 shrink-0 text-rose-600" />
-                <span>Multi-Day Conflicts Detected ({multiDayConflicts.length} dates):</span>
+          {/* Same-Floor Concurrent Booking Awareness Badge (When no direct collision on this room) */}
+          {!isConflict && floorConcurrentBookings.length > 0 && (
+            <div className="p-2.5 bg-slate-50 border border-slate-200 rounded-xl flex items-center justify-between text-xs text-slate-600">
+              <div className="flex items-center gap-2">
+                <Layers className="w-3.5 h-3.5 text-indigo-500 shrink-0" />
+                <span className="text-[11px]">
+                  <strong>Floor {currentRoom?.floor} Activity:</strong> {floorConcurrentBookings.length} other {floorConcurrentBookings.length === 1 ? 'room is' : 'rooms are'} booked during this time ({floorConcurrentBookings.map(f => f.room.name).join(', ')})
+                </span>
               </div>
-              <p className="text-[11px] text-rose-700 leading-normal pl-6">
-                The room is already reserved for this slot on: <span className="font-mono font-bold text-rose-900">{multiDayConflicts.join(', ')}</span>. Please change the time slot, date range, or select a different room.
-              </p>
+              <span className="text-[10px] font-bold text-emerald-600 bg-emerald-50 border border-emerald-200 px-2 py-0.5 rounded-full shrink-0">
+                This Room is Free
+              </span>
             </div>
           )}
 

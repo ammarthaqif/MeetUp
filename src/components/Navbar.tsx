@@ -14,6 +14,7 @@ interface NavbarProps {
   isAdminMode?: boolean;
   onOpenAdminAuth?: () => void;
   onExitAdminMode?: () => void;
+  onOpenRoomFinder?: () => void;
   adminEmail?: string;
 }
 
@@ -28,6 +29,7 @@ export const Navbar: React.FC<NavbarProps> = ({
   isAdminMode,
   onOpenAdminAuth,
   onExitAdminMode,
+  onOpenRoomFinder,
   adminEmail = 'ammarthaqif.ar@gmail.com',
 }) => {
   const isUserAdmin = user?.email?.toLowerCase() === adminEmail.toLowerCase();
@@ -65,8 +67,20 @@ export const Navbar: React.FC<NavbarProps> = ({
         )}
 
         {/* User / Authentication Status */}
-        <div className="flex items-center gap-3">
+        <div className="flex items-center gap-2 sm:gap-3">
           
+          {/* Smart Room Finder trigger button */}
+          {activeOffice && onOpenRoomFinder && !isAdminMode && (
+            <button
+              onClick={onOpenRoomFinder}
+              className="px-3 py-1.5 rounded-lg text-xs font-black transition-all cursor-pointer flex items-center gap-1.5 bg-gradient-to-r from-indigo-600 to-violet-600 hover:from-indigo-700 hover:to-violet-700 text-white shadow-2xs hover:shadow"
+              title="Find Available Rooms by Time & Duration"
+            >
+              <span className="text-amber-300">⚡</span>
+              <span className="hidden xs:inline">Room Finder</span>
+            </button>
+          )}
+
           {/* Admin console button: only shows if admin mode or authorized admin */}
           {onOpenAdminAuth && (
             <button
