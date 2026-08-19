@@ -1,19 +1,33 @@
 import React, { useState } from 'react';
 import { 
   Building2, Plus, Trash2, Edit3, X, HelpCircle, Check, 
-  Settings, Users, Shield, MapPin, Key, Layers, ChevronDown 
+  Settings, Users, Shield, MapPin, Key, Layers, ChevronDown, 
+  ShieldCheck, History 
 } from 'lucide-react';
-import { Office, Room, Booking } from '../types';
+import { Office, Room, Booking, ApprovedUser, AccessKey, AuditLog } from '../types';
+import { AdminAccessControl } from './AdminAccessControl';
+import { AdminAuditLogs } from './AdminAuditLogs';
 
 interface AdminPanelProps {
   offices: Office[];
   rooms: Room[];
   bookings: Booking[];
+  approvedUsers: ApprovedUser[];
+  accessKeys: AccessKey[];
+  auditLogs: AuditLog[];
+  adminEmail: string;
   onSaveOffice: (office: Omit<Office, 'createdAt'> & { id?: string }) => Promise<void>;
   onDeleteOffice: (officeId: string) => Promise<void>;
   onSaveRoom: (room: Room) => Promise<void>;
   onDeleteRoom: (roomId: string) => Promise<void>;
   onCancelBooking: (booking: Booking) => Promise<void>;
+  onAddApprovedUser: (email: string, name?: string, department?: string) => Promise<void>;
+  onBulkAddApprovedUsers: (emails: string[]) => Promise<number>;
+  onRemoveApprovedUser: (userId: string) => Promise<void>;
+  onGenerateAccessKey: (data: { label: string; expiresAt?: string; maxUses?: number }) => Promise<AccessKey>;
+  onToggleAccessKey: (keyId: string) => Promise<void>;
+  onRevokeAccessKey: (keyId: string) => Promise<void>;
+  onClearAuditLogs: () => Promise<void>;
   onExitAdmin: () => void;
 }
 
@@ -21,16 +35,28 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
   offices,
   rooms,
   bookings,
+  approvedUsers,
+  accessKeys,
+  auditLogs,
+  adminEmail,
   onSaveOffice,
   onDeleteOffice,
   onSaveRoom,
   onDeleteRoom,
   onCancelBooking,
+  onAddApprovedUser,
+  onBulkAddApprovedUsers,
+  onRemoveApprovedUser,
+  onGenerateAccessKey,
+  onToggleAccessKey,
+  onRevokeAccessKey,
+  onClearAuditLogs,
   onExitAdmin,
 }) => {
-  const [activeTab, setActiveTab] = useState<'offices' | 'rooms' | 'bookings'>('offices');
+  const [activeTab, setActiveTab] = useState<'offices' | 'rooms' | 'bookings' | 'access' | 'audit'>('offices');
   const [errorMessage, setErrorMessage] = useState('');
   const [successMessage, setSuccessMessage] = useState('');
+
 
   // Office form states
   const [editingOffice, setEditingOffice] = useState<Office | null>(null);
@@ -265,6 +291,22 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
             }`}
           >
             📅 Master Reservations
+          </button>
+          <button
+            onClick={() => setActiveTab('access')}
+            className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-all cursor-pointer ${
+              activeTab === 'access' ? 'bg-indigo-600 text-white' : 'bg-slate-800 text-slate-300 hover:bg-slate-750'
+            }`}
+          >
+            🛡️ Access Control & Keys
+          </button>
+          <button
+            onClick={() => setActiveTab('audit')}
+            className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-all cursor-pointer ${
+              activeTab === 'audit' ? 'bg-indigo-600 text-white' : 'bg-slate-800 text-slate-300 hover:bg-slate-750'
+            }`}
+          >
+            📜 Audit History
           </button>
           <button
             onClick={onExitAdmin}
@@ -783,6 +825,33 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
               </table>
             </div>
           )}
+        </div>
+      )}
+
+      {/* --- TAB 4: ACCESS CONTROL & TOKENS --- */}
+      {activeTab === 'access' && (
+        <div className="bg-slate-850 p-6 rounded-2xl border border-slate-800">
+          <AdminAccessControl
+            approvedUsers={approvedUsers}
+            accessKeys={accessKeys}
+            adminEmail={adminEmail}
+            onAddApprovedUser={onAddApprovedUser}
+            onBulkAddApprovedUsers={onBulkAddApprovedUsers}
+            onRemoveApprovedUser={onRemoveApprovedUser}
+            onGenerateAccessKey={onGenerateAccessKey}
+            onToggleAccessKey={onToggleAccessKey}
+            onRevokeAccessKey={onRevokeAccessKey}
+          />
+        </div>
+      )}
+
+      {/* --- TAB 5: AUDIT LOGS & TRAILS --- */}
+      {activeTab === 'audit' && (
+        <div className="bg-slate-850 p-6 rounded-2xl border border-slate-800">
+          <AdminAuditLogs
+            logs={auditLogs}
+            onClearLogs={onClearAuditLogs}
+          />
         </div>
       )}
 

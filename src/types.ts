@@ -43,3 +43,54 @@ export interface UserProfile {
   email: string;
   photoURL: string;
 }
+
+export interface ApprovedUser {
+  id: string;
+  email: string;
+  name?: string;
+  department?: string;
+  addedBy: string;
+  addedAt: number;
+}
+
+export interface AccessKey {
+  id: string;
+  token: string;
+  label: string;
+  createdBy: string;
+  createdAt: number;
+  expiresAt?: string; // Optional YYYY-MM-DD
+  maxUses?: number;
+  usedCount: number;
+  active: boolean;
+}
+
+export type AuditActionType = 
+  | 'BOOKING_CREATED'
+  | 'BOOKING_UPDATED'
+  | 'BOOKING_CANCELLED'
+  | 'TOKEN_ACCESS_GRANTED'
+  | 'APPROVED_USER_ADDED'
+  | 'APPROVED_USER_REMOVED'
+  | 'ACCESS_KEY_GENERATED'
+  | 'ACCESS_KEY_REVOKED'
+  | 'ROOM_MODIFIED'
+  | 'ROOM_DELETED'
+  | 'OFFICE_MODIFIED';
+
+export interface AuditLog {
+  id: string;
+  action: AuditActionType;
+  actorEmail: string;
+  actorName: string;
+  actorUid?: string;
+  targetTitle?: string;
+  roomName?: string;
+  floor?: number;
+  officeName?: string;
+  bookingDateTime?: string; // e.g. "2026-08-20 from 09:00 to 10:30"
+  details: string;
+  timestamp: number;
+  formattedTimestamp: string;
+}
+

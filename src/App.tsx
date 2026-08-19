@@ -8,7 +8,7 @@ import { onAuthStateChanged, User as FirebaseUser } from 'firebase/auth';
 import { 
   CalendarDays, Building2, Filter, Search, CheckCircle, 
   X, AlertTriangle, ArrowRight, ShieldCheck, Key, MapPin, Sparkles, ShieldAlert,
-  Clock, CalendarRange, Calendar
+  Clock, CalendarRange, Calendar, Lock, Shield
 } from 'lucide-react';
 
 // Subcomponents
@@ -19,14 +19,17 @@ import { BookingTimeline } from './components/BookingTimeline';
 import { WeeklyScheduleView } from './components/WeeklyScheduleView';
 import { MonthlyAvailabilityView } from './components/MonthlyAvailabilityView';
 import { BookingModal } from './components/BookingModal';
+import { BookingAuthModal } from './components/BookingAuthModal';
 import { MyBookings } from './components/MyBookings';
 import { AdminPanel } from './components/AdminPanel';
 import { SimulatedInbox, SimulatedEmail } from './components/SimulatedInbox';
 
 // Types and Utilities
-import { Booking, Room, Office } from './types';
+import { Booking, Room, Office, ApprovedUser, AccessKey, AuditLog, AuditActionType } from './types';
 import { formatFriendlyDate } from './utils';
 import { ROOMS as DEFAULT_ROOMS } from './roomsData';
+
+const ADMIN_EMAIL = 'ammarthaqif.ar@gmail.com';
 
 const DEFAULT_INITIAL_OFFICES: Office[] = [
   {
@@ -82,6 +85,85 @@ const DEFAULT_INITIAL_BOOKINGS: Booking[] = [
   }
 ];
 
+const DEFAULT_APPROVED_USERS: ApprovedUser[] = [
+  {
+    id: 'usr-admin-1',
+    email: 'ammarthaqif.ar@gmail.com',
+    name: 'Ammar Thaqif',
+    department: 'Executive Administration',
+    addedAt: 1700000000000,
+    addedBy: 'System'
+  },
+  {
+    id: 'usr-staff-1',
+    email: 'sarah.lin@workspace.corp',
+    name: 'Sarah Lin',
+    department: 'Product & Design',
+    addedAt: 1700000000000,
+    addedBy: 'ammarthaqif.ar@gmail.com'
+  },
+  {
+    id: 'usr-staff-2',
+    email: 'david.chen@workspace.corp',
+    name: 'David Chen',
+    department: 'Engineering',
+    addedAt: 1700000000000,
+    addedBy: 'ammarthaqif.ar@gmail.com'
+  }
+];
+
+const DEFAULT_ACCESS_KEYS: AccessKey[] = [
+  {
+    id: 'key-hq-standard',
+    token: 'SEC-HQ2026-PASS',
+    label: 'Corporate Staff Access Pass',
+    active: true,
+    createdAt: 1700000000000,
+    createdBy: 'ammarthaqif.ar@gmail.com',
+    usedCount: 0
+  },
+  {
+    id: 'key-vip-exec',
+    token: 'SEC-VIP77-TOKEN',
+    label: 'Visiting Partner & Vendor Token',
+    active: true,
+    createdAt: 1700000000000,
+    createdBy: 'ammarthaqif.ar@gmail.com',
+    usedCount: 0
+  }
+];
+
+const DEFAULT_AUDIT_LOGS: AuditLog[] = [
+  {
+    id: 'log-seed-1',
+    action: 'BOOKING_CREATED',
+    actorEmail: 'sarah.lin@workspace.corp',
+    actorName: 'Sarah Lin',
+    targetTitle: 'Product All-Hands & Strategy Sync',
+    roomName: 'The Arena',
+    floor: 1,
+    officeName: 'Downtown Singapore HQ',
+    bookingDateTime: `${new Date().toISOString().split('T')[0]} (10:00 - 12:00)`,
+    details: 'Created reservation "Product All-Hands & Strategy Sync" in The Arena (Level 1)',
+    timestamp: Date.now() - 3600000,
+    formattedTimestamp: new Date(Date.now() - 3600000).toLocaleString('en-US')
+  },
+  {
+    id: 'log-seed-2',
+    action: 'BOOKING_CREATED',
+    actorEmail: 'david.chen@workspace.corp',
+    actorName: 'David Chen',
+    targetTitle: 'Client Pitch: Vertex Ventures',
+    roomName: 'Orion Boardroom',
+    floor: 1,
+    officeName: 'Downtown Singapore HQ',
+    bookingDateTime: `${new Date().toISOString().split('T')[0]} (14:00 - 15:30)`,
+    details: 'Created reservation "Client Pitch: Vertex Ventures" in Orion Boardroom (Level 1)',
+    timestamp: Date.now() - 7200000,
+    formattedTimestamp: new Date(Date.now() - 7200000).toLocaleString('en-US')
+  }
+];
+
 export default function App() {
   const [selectedDate, setSelectedDate] = useState<string>(() => {
     const today = new Date();
@@ -120,6 +202,46 @@ export default function App() {
     }
   });
 
+  // Approved users whitelist
+  const [approvedUsers, setApprovedUsers] = useState<ApprovedUser[]>(() => {
+    try {
+      const saved = localStorage.getItem('office_sync_approved_users');
+      return saved ? JSON.parse(saved) : DEFAULT_APPROVED_USERS;
+    } catch {
+      return DEFAULT_APPROVED_USERS;
+    }
+  });
+
+  // Secret Access Keys / Tokens
+  const [accessKeys, setAccessKeys] = useState<AccessKey[]>(() => {
+    try {
+      const saved = localStorage.getItem('office_sync_access_keys');
+      return saved ? JSON.parse(saved) : DEFAULT_ACCESS_KEYS;
+    } catch {
+      return DEFAULT_ACCESS_KEYS;
+    }
+  });
+
+  // Audit Logs trail
+  const [auditLogs, setAuditLogs] = useState<AuditLog[]>(() => {
+    try {
+      const saved = localStorage.getItem('office_sync_audit_logs');
+      return saved ? JSON.parse(saved) : DEFAULT_AUDIT_LOGS;
+    } catch {
+      return DEFAULT_AUDIT_LOGS;
+    }
+  });
+
+  // Verified Tokens unlocked in current browser session
+  const [verifiedTokens, setVerifiedTokens] = useState<string[]>(() => {
+    try {
+      const saved = localStorage.getItem('office_sync_verified_tokens');
+      return saved ? JSON.parse(saved) : ['SEC-HQ2026-PASS'];
+    } catch {
+      return ['SEC-HQ2026-PASS'];
+    }
+  });
+
   // Active Workspace State
   const [activeOffice, setActiveOffice] = useState<Office | null>(() => {
     try {
@@ -138,9 +260,7 @@ export default function App() {
       return false;
     }
   });
-  const [showAdminModal, setShowAdminModal] = useState(false);
-  const [adminPasswordInput, setAdminPasswordInput] = useState('');
-  const [adminAuthError, setAdminAuthError] = useState('');
+  const [showAdminRestrictionModal, setShowAdminRestrictionModal] = useState(false);
 
   // Passkey Login State for staff
   const [passkeyInput, setPasskeyInput] = useState('');
@@ -169,6 +289,8 @@ export default function App() {
 
   // Modal actions
   const [isModalOpen, setIsModalOpen] = useState(false);
+  const [isAuthModalOpen, setIsAuthModalOpen] = useState(false);
+  const [pendingBookingIntent, setPendingBookingIntent] = useState<{ room: Room; hour?: string | null; date?: string } | null>(null);
   const [selectedRoomForModal, setSelectedRoomForModal] = useState<Room | null>(null);
   const [selectedHourForModal, setSelectedHourForModal] = useState<string | null>(null);
   const [editingBooking, setEditingBooking] = useState<Booking | null>(null);
@@ -201,9 +323,93 @@ export default function App() {
 
   useEffect(() => {
     try {
+      localStorage.setItem('office_sync_approved_users', JSON.stringify(approvedUsers));
+    } catch {}
+  }, [approvedUsers]);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem('office_sync_access_keys', JSON.stringify(accessKeys));
+    } catch {}
+  }, [accessKeys]);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem('office_sync_audit_logs', JSON.stringify(auditLogs));
+    } catch {}
+  }, [auditLogs]);
+
+  useEffect(() => {
+    try {
       localStorage.setItem('office_sync_emails', JSON.stringify(simulatedEmails));
     } catch {}
   }, [simulatedEmails]);
+
+  // -------------------------------------------------------------
+  // Centralized Activity & Audit Logger
+  // -------------------------------------------------------------
+  const logActivity = (data: {
+    action: AuditActionType;
+    actorEmail?: string;
+    actorName?: string;
+    actorUid?: string;
+    targetTitle?: string;
+    roomName?: string;
+    floor?: number;
+    officeName?: string;
+    bookingDateTime?: string;
+    details: string;
+  }) => {
+    const now = new Date();
+    const newLog: AuditLog = {
+      id: `audit-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
+      action: data.action,
+      actorEmail: data.actorEmail || user?.email || 'Authorized Token User',
+      actorName: data.actorName || user?.displayName || 'Authorized User',
+      actorUid: data.actorUid || user?.uid,
+      targetTitle: data.targetTitle,
+      roomName: data.roomName,
+      floor: data.floor,
+      officeName: data.officeName || activeOffice?.name,
+      bookingDateTime: data.bookingDateTime,
+      details: data.details,
+      timestamp: Date.now(),
+      formattedTimestamp: now.toLocaleString('en-US', {
+        month: 'short',
+        day: 'numeric',
+        year: 'numeric',
+        hour: '2-digit',
+        minute: '2-digit',
+        second: '2-digit',
+      }),
+    };
+
+    setAuditLogs(prev => [newLog, ...prev.slice(0, 499)]);
+
+    try {
+      setDoc(doc(db, 'audit_logs', newLog.id), newLog).catch(() => {});
+    } catch {}
+  };
+
+  // -------------------------------------------------------------
+  // Authorization Gate Verification
+  // -------------------------------------------------------------
+  const isUserAuthorizedToBook = (): boolean => {
+    // 1. Super Admin is always authorized
+    if (user?.email?.toLowerCase() === ADMIN_EMAIL.toLowerCase()) return true;
+
+    // 2. User logged in with whitelisted email
+    if (user?.email) {
+      const isApproved = approvedUsers.some(u => u.email.toLowerCase() === user.email?.toLowerCase());
+      if (isApproved) return true;
+    }
+
+    // 3. User unlocked with a valid, active Secret Access Key Token
+    const hasValidKey = accessKeys.some(k => k.active && verifiedTokens.includes(k.token));
+    if (hasValidKey) return true;
+
+    return false;
+  };
 
   // -------------------------------------------------------------
   // DB Listeners & Online Hydration (with resilient offline fallback)
@@ -222,7 +428,6 @@ export default function App() {
           setOffices(officeList);
         }
       }, (error) => {
-        // Silently operates in offline mode without crashing
         console.warn('Operating in offline local cache mode for offices:', error.message);
       });
       return () => unsubscribe();
@@ -274,7 +479,71 @@ export default function App() {
     }
   }, []);
 
-  // Keep active office synchronized with real-time db definitions (address/passkey updates)
+  // Real-time listen to Approved Users
+  useEffect(() => {
+    try {
+      const usersCollection = collection(db, 'approved_users');
+      const unsubscribe = onSnapshot(usersCollection, (snapshot) => {
+        if (!snapshot.empty) {
+          const userList: ApprovedUser[] = [];
+          snapshot.forEach((docSnap) => {
+            userList.push({ id: docSnap.id, ...docSnap.data() } as ApprovedUser);
+          });
+          setApprovedUsers(userList);
+        }
+      }, (error) => {
+        console.warn('Operating in offline local cache mode for approved users:', error.message);
+      });
+      return () => unsubscribe();
+    } catch (e) {
+      console.warn('Firestore approved users listener fallback:', e);
+    }
+  }, []);
+
+  // Real-time listen to Access Keys
+  useEffect(() => {
+    try {
+      const keysCollection = collection(db, 'access_keys');
+      const unsubscribe = onSnapshot(keysCollection, (snapshot) => {
+        if (!snapshot.empty) {
+          const keyList: AccessKey[] = [];
+          snapshot.forEach((docSnap) => {
+            keyList.push({ id: docSnap.id, ...docSnap.data() } as AccessKey);
+          });
+          setAccessKeys(keyList);
+        }
+      }, (error) => {
+        console.warn('Operating in offline local cache mode for access keys:', error.message);
+      });
+      return () => unsubscribe();
+    } catch (e) {
+      console.warn('Firestore access keys listener fallback:', e);
+    }
+  }, []);
+
+  // Real-time listen to Audit Logs
+  useEffect(() => {
+    try {
+      const auditCollection = collection(db, 'audit_logs');
+      const unsubscribe = onSnapshot(auditCollection, (snapshot) => {
+        if (!snapshot.empty) {
+          const logList: AuditLog[] = [];
+          snapshot.forEach((docSnap) => {
+            logList.push({ id: docSnap.id, ...docSnap.data() } as AuditLog);
+          });
+          logList.sort((a, b) => b.timestamp - a.timestamp);
+          setAuditLogs(logList);
+        }
+      }, (error) => {
+        console.warn('Operating in offline local cache mode for audit logs:', error.message);
+      });
+      return () => unsubscribe();
+    } catch (e) {
+      console.warn('Firestore audit logs listener fallback:', e);
+    }
+  }, []);
+
+  // Keep active office synchronized with real-time db definitions
   useEffect(() => {
     if (activeOffice && offices.length > 0) {
       const fresh = offices.find(o => o.id === activeOffice.id);
@@ -284,7 +553,6 @@ export default function App() {
           try {
             localStorage.setItem('office_sync_active_office', JSON.stringify(fresh));
           } catch {}
-          // Correct floor index if out-of-bounds
           if (!fresh.floors.includes(selectedFloor)) {
             setSelectedFloor(fresh.floors[0] || 1);
           }
@@ -303,25 +571,35 @@ export default function App() {
             const token = localStorage.getItem('google_calendar_access_token');
             setGoogleToken(token);
           } catch {}
+
+          // If the logged in user is admin, auto-log activity
+          if (currentUser.email?.toLowerCase() === ADMIN_EMAIL.toLowerCase()) {
+            console.log('Super Administrator session confirmed.');
+          }
         } else {
           setGoogleToken(null);
+          // If user logs out while in admin mode, exit admin
+          if (isAdminMode) {
+            setIsAdminMode(false);
+            localStorage.removeItem('office_sync_admin_mode');
+          }
         }
       });
       return () => unsubscribe();
     } catch (e) {
       console.warn('Auth listener offline fallback:', e);
     }
-  }, []);
+  }, [isAdminMode]);
 
   // -------------------------------------------------------------
-  // Employee Login Passkey Verification
+  // Employee Login Passkey Verification (Without exposing secrets)
   // -------------------------------------------------------------
   const handlePasskeySubmit = (e: React.FormEvent) => {
     e.preventDefault();
     setPasskeyError('');
 
     if (!passkeyInput.trim()) {
-      setPasskeyError('Passkey field cannot be blank.');
+      setPasskeyError('Office Passkey field cannot be blank.');
       return;
     }
 
@@ -336,9 +614,9 @@ export default function App() {
       } catch {}
       setSelectedFloor(matched.floors[0] || 1);
       setPasskeyInput('');
-      showNotification('success', `Dashboard verified. Connected to ${matched.name}.`);
+      showNotification('success', `Connected to ${matched.name}.`);
     } else {
-      setPasskeyError('Invalid Office Passkey. Check the directory below.');
+      setPasskeyError('Invalid Office Passkey. Please verify with your workspace administrator.');
     }
   };
 
@@ -347,26 +625,21 @@ export default function App() {
     try {
       localStorage.removeItem('office_sync_active_office');
     } catch {}
-    showNotification('info', 'Disconnected from office portal.');
+    showNotification('info', 'Switched location.');
   };
 
   // -------------------------------------------------------------
-  // Admin Mode Authentication (admin123)
+  // Admin Mode Entry: STRICTLY RESTRICTED TO ammarthaqif.ar@gmail.com
   // -------------------------------------------------------------
-  const handleAdminAuthSubmit = (e: React.FormEvent) => {
-    e.preventDefault();
-    setAdminAuthError('');
-
-    if (adminPasswordInput === 'admin123') {
+  const handleOpenAdminConsole = () => {
+    if (user && user.email?.toLowerCase() === ADMIN_EMAIL.toLowerCase()) {
       setIsAdminMode(true);
       try {
         localStorage.setItem('office_sync_admin_mode', 'true');
       } catch {}
-      setShowAdminModal(false);
-      setAdminPasswordInput('');
-      showNotification('success', 'Admin session unlocked.');
+      showNotification('success', 'Admin Control Room unlocked for ' + ADMIN_EMAIL);
     } else {
-      setAdminAuthError('Incorrect Administration Password.');
+      setShowAdminRestrictionModal(true);
     }
   };
 
@@ -379,7 +652,64 @@ export default function App() {
   };
 
   // -------------------------------------------------------------
-  // Booking operations (Save & Cancel)
+  // Token Verification Handler (from BookingAuthModal)
+  // -------------------------------------------------------------
+  const handleVerifySecretToken = (tokenString: string): boolean => {
+    const cleanToken = tokenString.trim().toUpperCase();
+    const matchingKey = accessKeys.find(k => k.token.toUpperCase() === cleanToken && k.active);
+    
+    if (!matchingKey) return false;
+
+    // Check expiration
+    if (matchingKey.expiresAt) {
+      const today = new Date().toISOString().split('T')[0];
+      if (matchingKey.expiresAt < today) return false;
+    }
+
+    // Check max uses
+    if (matchingKey.maxUses && matchingKey.usedCount >= matchingKey.maxUses) return false;
+
+    // Increment used count
+    const updatedKey: AccessKey = { ...matchingKey, usedCount: matchingKey.usedCount + 1 };
+    setAccessKeys(prev => prev.map(k => k.id === matchingKey.id ? updatedKey : k));
+    try {
+      setDoc(doc(db, 'access_keys', matchingKey.id), updatedKey, { merge: true }).catch(() => {});
+    } catch {}
+
+    // Add to verified tokens
+    setVerifiedTokens(prev => {
+      const updated = Array.from(new Set([...prev, matchingKey.token]));
+      try {
+        localStorage.setItem('office_sync_verified_tokens', JSON.stringify(updated));
+      } catch {}
+      return updated;
+    });
+
+    logActivity({
+      action: 'TOKEN_ACCESS_GRANTED',
+      details: `Secret Access Token "${matchingKey.label}" (${matchingKey.token}) verified for room booking permissions.`,
+    });
+
+    showNotification('success', `Access token verified! Booking unlocked for ${matchingKey.label}.`);
+    
+    // Close auth modal and open pending booking modal
+    setIsAuthModalOpen(false);
+    if (pendingBookingIntent) {
+      setSelectedRoomForModal(pendingBookingIntent.room);
+      setSelectedHourForModal(pendingBookingIntent.hour || null);
+      if (pendingBookingIntent.date) {
+        setSelectedDate(pendingBookingIntent.date);
+      }
+      setEditingBooking(null);
+      setIsModalOpen(true);
+      setPendingBookingIntent(null);
+    }
+
+    return true;
+  };
+
+  // -------------------------------------------------------------
+  // Booking operations (Save & Cancel with strict ownership & audit trails)
   // -------------------------------------------------------------
   const handleSaveBooking = async (
     bookingData: Omit<Booking, 'id' | 'createdAt'> & { id?: string; multiDates?: string[] }
@@ -407,28 +737,39 @@ export default function App() {
           endTime: bookingData.endTime,
           hostName: bookingData.hostName,
           hostEmail: emailToDeliver,
-          hostUid: bookingData.hostUid,
+          hostUid: bookingData.hostUid || user?.uid,
           attendees: bookingData.attendees,
           outlookSynced: bookingData.outlookSynced || false,
           createdAt: Date.now(),
         };
         createdBookings.push(docPayload);
 
-        // Async write to Firestore if available
         try {
           addDoc(collection(db, 'bookings'), docPayload).catch(() => {});
         } catch {}
+
+        // Audit Trail
+        logActivity({
+          action: 'BOOKING_CREATED',
+          actorEmail: emailToDeliver,
+          actorName: bookingData.hostName,
+          actorUid: bookingData.hostUid || user?.uid,
+          targetTitle: bookingData.title,
+          roomName: room.name,
+          floor: room.floor,
+          bookingDateTime: `${dateString} (${bookingData.startTime} - ${bookingData.endTime})`,
+          details: `Reserved "${bookingData.title}" in ${room.name} (Lvl ${room.floor}) for ${bookingData.startTime} - ${bookingData.endTime}`,
+        });
       }
 
       setBookings(prev => [...createdBookings, ...prev]);
 
-      // Append multi-day email notification to simulated inbox
       const newEmail: SimulatedEmail = {
         id: `email-${Date.now()}`,
         to: emailToDeliver,
         subject: `[CONFIRMED] Multi-Day Room Reservation: "${bookingData.title}"`,
         date: new Date().toLocaleString(),
-        body: `Successful booking across multiple days!`,
+        body: `Successful booking across ${bookingData.multiDates.length} days!`,
         details: {
           title: bookingData.title,
           roomName: room.name,
@@ -443,7 +784,7 @@ export default function App() {
         }
       };
       setSimulatedEmails(prev => [newEmail, ...prev]);
-      showNotification('success', `Successfully reserved ${room.name} over ${bookingData.multiDates.length} specified days.`);
+      showNotification('success', `Successfully reserved ${room.name} over ${bookingData.multiDates.length} days.`);
 
     } else {
       // Single booking save
@@ -460,7 +801,7 @@ export default function App() {
         endTime: bookingData.endTime,
         hostName: bookingData.hostName,
         hostEmail: emailToDeliver,
-        hostUid: bookingData.hostUid,
+        hostUid: bookingData.hostUid || user?.uid,
         attendees: bookingData.attendees,
         outlookSynced: bookingData.outlookSynced || false,
         googleEventId: bookingData.googleEventId || null,
@@ -468,12 +809,37 @@ export default function App() {
       };
 
       if (isEditing && bookingData.id) {
+        // Enforce Ownership check
+        const existing = bookings.find(b => b.id === bookingData.id);
+        if (existing) {
+          const isOwner = (user && (
+            (user.uid && existing.hostUid === user.uid) ||
+            (user.email && existing.hostEmail.toLowerCase() === user.email.toLowerCase())
+          )) || (user?.email?.toLowerCase() === ADMIN_EMAIL.toLowerCase());
+
+          if (!isOwner) {
+            showNotification('error', 'Permission denied: You can only edit bookings made by yourself.');
+            return;
+          }
+        }
+
         setBookings(prev => prev.map(b => b.id === bookingData.id ? { ...b, ...docPayload } : b));
         try {
           setDoc(doc(db, 'bookings', bookingData.id), docPayload, { merge: true }).catch(() => {});
         } catch {}
 
-        // Email for edit confirmation
+        logActivity({
+          action: 'BOOKING_UPDATED',
+          actorEmail: emailToDeliver,
+          actorName: bookingData.hostName,
+          actorUid: bookingData.hostUid || user?.uid,
+          targetTitle: bookingData.title,
+          roomName: room.name,
+          floor: room.floor,
+          bookingDateTime: `${bookingData.date} (${bookingData.startTime} - ${bookingData.endTime})`,
+          details: `Modified reservation details for "${bookingData.title}" in ${room.name} (Lvl ${room.floor})`,
+        });
+
         const editEmail: SimulatedEmail = {
           id: `email-${Date.now()}`,
           to: emailToDeliver,
@@ -501,7 +867,18 @@ export default function App() {
           addDoc(collection(db, 'bookings'), docPayload).catch(() => {});
         } catch {}
 
-        // Email for new reservation
+        logActivity({
+          action: 'BOOKING_CREATED',
+          actorEmail: emailToDeliver,
+          actorName: bookingData.hostName,
+          actorUid: bookingData.hostUid || user?.uid,
+          targetTitle: bookingData.title,
+          roomName: room.name,
+          floor: room.floor,
+          bookingDateTime: `${bookingData.date} (${bookingData.startTime} - ${bookingData.endTime})`,
+          details: `Created reservation "${bookingData.title}" in ${room.name} (Lvl ${room.floor})`,
+        });
+
         const newEmail: SimulatedEmail = {
           id: `email-${Date.now()}`,
           to: emailToDeliver,
@@ -528,22 +905,43 @@ export default function App() {
   };
 
   const handleCancelBooking = async (bookingId: string) => {
-    if (!window.confirm('Are you sure you want to cancel this reservation?')) {
-      return;
-    }
     const booking = bookings.find(b => b.id === bookingId);
     if (!booking) return;
 
+    // Strict Ownership Enforcement: user can only cancel bookings made by themselves unless super admin
+    const isOwner = (user && (
+      (user.uid && booking.hostUid === user.uid) ||
+      (user.email && booking.hostEmail.toLowerCase() === user.email.toLowerCase())
+    )) || (user?.email?.toLowerCase() === ADMIN_EMAIL.toLowerCase());
+
+    if (!isOwner) {
+      showNotification('error', 'Permission denied: You can only cancel reservations created by yourself.');
+      return;
+    }
+
+    if (!window.confirm(`Are you sure you want to cancel the reservation for "${booking.title}"?`)) {
+      return;
+    }
+
     const room = rooms.find(r => r.id === booking.roomId);
 
-    // Immediate local state update
     setBookings(prev => prev.filter(b => b.id !== bookingId));
 
     try {
       deleteDoc(doc(db, 'bookings', bookingId)).catch(() => {});
     } catch {}
 
-    // Append cancellation notification email
+    logActivity({
+      action: 'BOOKING_CANCELLED',
+      actorEmail: user?.email || booking.hostEmail,
+      actorName: user?.displayName || booking.hostName,
+      targetTitle: booking.title,
+      roomName: room?.name || 'Meeting Room',
+      floor: booking.floor,
+      bookingDateTime: `${booking.date} (${booking.startTime} - ${booking.endTime})`,
+      details: `Reservation "${booking.title}" cancelled by ${user?.displayName || booking.hostName} (${user?.email || booking.hostEmail})`,
+    });
+
     const cancelEmail: SimulatedEmail = {
       id: `email-${Date.now()}`,
       to: booking.hostEmail,
@@ -574,7 +972,7 @@ export default function App() {
     setIsLoggingIn(true);
     try {
       await googleSignIn();
-      showNotification('success', 'Authenticated with Google Calendar scope.');
+      showNotification('success', 'Authenticated with Google Account.');
     } catch (err: any) {
       console.error(err);
       showNotification('error', 'Google Sign-In Failed.');
@@ -605,7 +1003,7 @@ export default function App() {
   };
 
   // -------------------------------------------------------------
-  // Administrative Operations (Delivering from AdminPanel UI)
+  // Administrative Operations (Strictly in Admin Mode)
   // -------------------------------------------------------------
   const handleSaveOfficeAdmin = async (officeData: Omit<Office, 'createdAt'> & { id?: string }) => {
     const id = officeData.id || `office-${Date.now()}`;
@@ -627,10 +1025,16 @@ export default function App() {
       setDoc(doc(db, 'offices', id), newOffice, { merge: true }).catch(() => {});
     } catch {}
 
+    logActivity({
+      action: 'OFFICE_MODIFIED',
+      details: `Configured office workspace "${newOffice.name}" (${newOffice.location})`,
+    });
+
     showNotification('success', 'Office properties synchronized safely.');
   };
 
   const handleDeleteOfficeAdmin = async (officeId: string) => {
+    const target = offices.find(o => o.id === officeId);
     setOffices(prev => prev.filter(o => o.id !== officeId));
     setRooms(prev => prev.filter(r => r.officeId !== officeId));
     setBookings(prev => prev.filter(b => b.officeId !== officeId));
@@ -645,6 +1049,12 @@ export default function App() {
         localStorage.removeItem('office_sync_active_office');
       } catch {}
     }
+
+    logActivity({
+      action: 'OFFICE_MODIFIED',
+      details: `Removed office profile "${target?.name || officeId}"`,
+    });
+
     showNotification('success', 'Office and all associated rooms deleted.');
   };
 
@@ -661,10 +1071,18 @@ export default function App() {
       setDoc(doc(db, 'rooms', roomData.id), roomData, { merge: true }).catch(() => {});
     } catch {}
 
+    logActivity({
+      action: 'ROOM_MODIFIED',
+      roomName: roomData.name,
+      floor: roomData.floor,
+      details: `Saved room profile for "${roomData.name}" (Floor ${roomData.floor}, Capacity ${roomData.capacity})`,
+    });
+
     showNotification('success', 'Room specifications saved.');
   };
 
   const handleDeleteRoomAdmin = async (roomId: string) => {
+    const room = rooms.find(r => r.id === roomId);
     setRooms(prev => prev.filter(r => r.id !== roomId));
     setBookings(prev => prev.filter(b => b.roomId !== roomId));
 
@@ -672,11 +1090,163 @@ export default function App() {
       deleteDoc(doc(db, 'rooms', roomId)).catch(() => {});
     } catch {}
 
+    logActivity({
+      action: 'ROOM_DELETED',
+      roomName: room?.name,
+      floor: room?.floor,
+      details: `Deleted room specification "${room?.name || roomId}"`,
+    });
+
     showNotification('success', 'Room deleted, pending calendar invitations cleared.');
   };
 
-  const handleCancelBookingAdmin = async (booking: Booking) => {
-    await handleCancelBooking(booking.id);
+  // Whitelist Admin Handlers
+  const handleAddApprovedUser = async (email: string, name?: string, department?: string) => {
+    const id = `usr-${Date.now()}`;
+    const newUser: ApprovedUser = {
+      id,
+      email: email.toLowerCase().trim(),
+      name,
+      department,
+      addedAt: Date.now(),
+      addedBy: user?.email || ADMIN_EMAIL,
+    };
+
+    setApprovedUsers(prev => [newUser, ...prev]);
+    try {
+      setDoc(doc(db, 'approved_users', id), newUser).catch(() => {});
+    } catch {}
+
+    logActivity({
+      action: 'APPROVED_USER_ADDED',
+      details: `Whitelisted user "${newUser.email}" with booking authorization permissions.`,
+    });
+  };
+
+  const handleBulkAddApprovedUsers = async (emails: string[]): Promise<number> => {
+    let addedCount = 0;
+    const newItems: ApprovedUser[] = [];
+
+    for (const rawEmail of emails) {
+      const email = rawEmail.toLowerCase().trim();
+      if (!approvedUsers.some(u => u.email.toLowerCase() === email) && email !== ADMIN_EMAIL.toLowerCase()) {
+        const id = `usr-${Date.now()}-${Math.random().toString(36).substr(2, 4)}`;
+        const u: ApprovedUser = {
+          id,
+          email,
+          addedAt: Date.now(),
+          addedBy: user?.email || ADMIN_EMAIL,
+        };
+        newItems.push(u);
+        try {
+          setDoc(doc(db, 'approved_users', id), u).catch(() => {});
+        } catch {}
+        addedCount++;
+      }
+    }
+
+    if (newItems.length > 0) {
+      setApprovedUsers(prev => [...newItems, ...prev]);
+      logActivity({
+        action: 'APPROVED_USER_ADDED',
+        details: `Bulk uploaded ${addedCount} corporate accounts to approved staff whitelist.`,
+      });
+    }
+
+    return addedCount;
+  };
+
+  const handleRemoveApprovedUser = async (userId: string) => {
+    const target = approvedUsers.find(u => u.id === userId);
+    setApprovedUsers(prev => prev.filter(u => u.id !== userId));
+
+    try {
+      deleteDoc(doc(db, 'approved_users', userId)).catch(() => {});
+    } catch {}
+
+    if (target) {
+      logActivity({
+        action: 'APPROVED_USER_REMOVED',
+        details: `Revoked booking authorization permissions for "${target.email}"`,
+      });
+    }
+
+    showNotification('info', 'User access permissions revoked.');
+  };
+
+  // Access Key Token Generator Handlers
+  const handleGenerateAccessKey = async (data: { label: string; expiresAt?: string; maxUses?: number }): Promise<AccessKey> => {
+    const id = `key-${Date.now()}`;
+    const randomHex = Math.random().toString(36).substring(2, 6).toUpperCase();
+    const randomNum = Math.floor(1000 + Math.random() * 9000);
+    const token = `SEC-${randomHex}-${randomNum}`;
+
+    const newKey: AccessKey = {
+      id,
+      token,
+      label: data.label,
+      expiresAt: data.expiresAt,
+      maxUses: data.maxUses,
+      usedCount: 0,
+      active: true,
+      createdAt: Date.now(),
+      createdBy: user?.email || ADMIN_EMAIL,
+    };
+
+    setAccessKeys(prev => [newKey, ...prev]);
+    try {
+      setDoc(doc(db, 'access_keys', id), newKey).catch(() => {});
+    } catch {}
+
+    logActivity({
+      action: 'ACCESS_KEY_GENERATED',
+      details: `Generated Secret Token "${newKey.label}" (${newKey.token}) with ${newKey.maxUses ? `${newKey.maxUses} uses` : 'unlimited uses'}`,
+    });
+
+    return newKey;
+  };
+
+  const handleToggleAccessKey = async (keyId: string) => {
+    const target = accessKeys.find(k => k.id === keyId);
+    if (!target) return;
+
+    const updated = { ...target, active: !target.active };
+    setAccessKeys(prev => prev.map(k => k.id === keyId ? updated : k));
+
+    try {
+      setDoc(doc(db, 'access_keys', keyId), updated, { merge: true }).catch(() => {});
+    } catch {}
+
+    logActivity({
+      action: updated.active ? 'ACCESS_KEY_GENERATED' : 'ACCESS_KEY_REVOKED',
+      details: `${updated.active ? 'Re-activated' : 'Suspended'} Secret Token "${target.label}" (${target.token})`,
+    });
+  };
+
+  const handleRevokeAccessKey = async (keyId: string) => {
+    const target = accessKeys.find(k => k.id === keyId);
+    setAccessKeys(prev => prev.filter(k => k.id !== keyId));
+
+    try {
+      deleteDoc(doc(db, 'access_keys', keyId)).catch(() => {});
+    } catch {}
+
+    if (target) {
+      logActivity({
+        action: 'ACCESS_KEY_REVOKED',
+        details: `Deleted Secret Token "${target.label}" (${target.token})`,
+      });
+    }
+
+    showNotification('info', 'Token permanently revoked.');
+  };
+
+  const handleClearAuditLogs = async () => {
+    setAuditLogs([]);
+    try {
+      localStorage.removeItem('office_sync_audit_logs');
+    } catch {}
+    showNotification('info', 'Audit trail cleared.');
   };
 
   // -------------------------------------------------------------
@@ -685,7 +1255,6 @@ export default function App() {
   const currentOfficeRooms = rooms.filter(r => r.officeId === activeOffice?.id);
   const currentOfficeBookings = bookings.filter(b => b.officeId === activeOffice?.id);
 
-  // Auto-calculated facilities options loaded from what's configured on active site rooms!
   const allUniqueAmenities = Array.from(
     new Set(currentOfficeRooms.flatMap(room => room.amenities))
   ).filter(Boolean) as string[];
@@ -701,15 +1270,12 @@ export default function App() {
   const filteredRooms = currentOfficeRooms.filter(room => {
     if (room.floor !== selectedFloor) return false;
 
-    // Search query match
     if (searchQuery && !room.name.toLowerCase().includes(searchQuery.toLowerCase())) return false;
 
-    // Capacity matching
     if (capacityFilter === 'small' && room.capacity > 4) return false;
     if (capacityFilter === 'medium' && (room.capacity < 5 || room.capacity > 12)) return false;
     if (capacityFilter === 'large' && room.capacity < 13) return false;
 
-    // Amenities checklist matching
     if (selectedAmenities.length > 0) {
       const hasAll = selectedAmenities.every(selected => 
         room.amenities.some(roomAmenity => roomAmenity.toLowerCase().includes(selected.toLowerCase()))
@@ -720,8 +1286,13 @@ export default function App() {
     return true;
   });
 
-  // Timeline & room selection triggers
+  // Timeline & room selection triggers (Protected with Auth & Whitelist Gate)
   const handleRoomBookClick = (room: Room) => {
+    if (!isUserAuthorizedToBook()) {
+      setPendingBookingIntent({ room, hour: null, date: selectedDate });
+      setIsAuthModalOpen(true);
+      return;
+    }
     setSelectedRoomForModal(room);
     setSelectedHourForModal(null);
     setEditingBooking(null);
@@ -729,6 +1300,12 @@ export default function App() {
   };
 
   const handleTimelineCellClick = (room: Room, hour: string, customDate?: string) => {
+    const targetDate = customDate || selectedDate;
+    if (!isUserAuthorizedToBook()) {
+      setPendingBookingIntent({ room, hour, date: targetDate });
+      setIsAuthModalOpen(true);
+      return;
+    }
     setSelectedRoomForModal(room);
     setSelectedHourForModal(hour);
     if (customDate) {
@@ -768,17 +1345,17 @@ export default function App() {
               ) : notification.type === 'error' ? (
                 <AlertTriangle className="w-5 h-5 shrink-0 text-rose-300 mt-0.5" />
               ) : (
-                <Sparkles className="w-5 h-5 shrink-0 text-amber-300 mt-0.5" />
+                <Building2 className="w-5 h-5 shrink-0 text-sky-400 mt-0.5" />
               )}
-              <div>
-                <p className="text-xs font-bold leading-relaxed">{notification.message}</p>
+              <div className="text-xs font-semibold leading-relaxed">
+                {notification.message}
               </div>
             </div>
           </motion.div>
         )}
       </AnimatePresence>
 
-      {/* Header component */}
+      {/* Global Top Navbar */}
       <Navbar
         user={user}
         onLogin={handleLoginGoogle}
@@ -788,47 +1365,60 @@ export default function App() {
         activeOffice={activeOffice}
         onSwitchOffice={handleSwitchOffice}
         isAdminMode={isAdminMode}
-        onOpenAdminAuth={() => setShowAdminModal(true)}
+        onOpenAdminAuth={handleOpenAdminConsole}
         onExitAdminMode={handleExitAdminMode}
+        adminEmail={ADMIN_EMAIL}
       />
 
-      {/* Admin Mode Overlay Portal */}
+      {/* Main View Router */}
       {isAdminMode ? (
-        <main className="flex-1 max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6 w-full space-y-6">
+        
+        /* Admin Management Console (Restricted strictly to ammarthaqif.ar@gmail.com) */
+        <main className="flex-1 max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6 w-full">
           <AdminPanel
             offices={offices}
             rooms={rooms}
             bookings={bookings}
+            approvedUsers={approvedUsers}
+            accessKeys={accessKeys}
+            auditLogs={auditLogs}
+            adminEmail={ADMIN_EMAIL}
             onSaveOffice={handleSaveOfficeAdmin}
             onDeleteOffice={handleDeleteOfficeAdmin}
             onSaveRoom={handleSaveRoomAdmin}
             onDeleteRoom={handleDeleteRoomAdmin}
-            onCancelBooking={handleCancelBookingAdmin}
+            onCancelBooking={(booking) => handleCancelBooking(booking.id)}
+            onAddApprovedUser={handleAddApprovedUser}
+            onBulkAddApprovedUsers={handleBulkAddApprovedUsers}
+            onRemoveApprovedUser={handleRemoveApprovedUser}
+            onGenerateAccessKey={handleGenerateAccessKey}
+            onToggleAccessKey={handleToggleAccessKey}
+            onRevokeAccessKey={handleRevokeAccessKey}
+            onClearAuditLogs={handleClearAuditLogs}
             onExitAdmin={handleExitAdminMode}
           />
         </main>
+
       ) : !activeOffice ? (
         
-        /* Employee Verification Screen (Passkey Gate) */
-        <div className="flex-1 flex flex-col items-center justify-center p-4 sm:p-8 max-w-md mx-auto w-full my-12">
-          <div className="bg-white rounded-3xl border border-slate-200 shadow-2xl p-6 sm:p-8 w-full space-y-6 relative overflow-hidden">
+        /* Employee Workspace Passkey Screen (Clean, no exposed testing passkeys) */
+        <div className="flex-1 flex items-center justify-center p-4">
+          <div className="max-w-md w-full bg-white rounded-3xl border border-slate-200 shadow-xl p-8 space-y-6 text-center animate-in fade-in zoom-in-95 duration-200">
             
-            {/* Visual Accent */}
-            <div className="absolute top-0 left-0 right-0 h-1.5 bg-gradient-to-r from-indigo-500 via-purple-500 to-pink-500" />
+            <div className="w-14 h-14 bg-indigo-600 rounded-2xl flex items-center justify-center text-white mx-auto shadow-md">
+              <Building2 className="w-7 h-7" />
+            </div>
 
-            <div className="text-center space-y-2">
-              <div className="w-12 h-12 bg-indigo-50 rounded-2xl flex items-center justify-center text-indigo-600 mx-auto border border-indigo-100 shadow-sm">
-                <Building2 className="w-6 h-6 animate-pulse" />
-              </div>
-              <h2 className="font-sans font-black text-slate-800 text-lg tracking-tight uppercase">
-                Workplace Portal Access
+            <div className="space-y-1">
+              <h2 className="text-xl font-bold font-sans tracking-tight text-slate-900">
+                Corporate Workspace Portal
               </h2>
-              <p className="text-[11px] text-slate-500 leading-relaxed font-medium">
-                Enter your site's access passkey to load the interactive meeting floor plans and timeline booking scheduler.
+              <p className="text-xs text-slate-500">
+                Select your building and enter your office passkey to access live room schedules.
               </p>
             </div>
 
-            <form onSubmit={handlePasskeySubmit} className="space-y-4">
+            <form onSubmit={handlePasskeySubmit} className="space-y-4 text-left">
               <div>
                 <label className="block text-[10px] font-bold text-slate-500 uppercase tracking-wider mb-1 font-mono">
                   Enter Office Passkey
@@ -839,7 +1429,7 @@ export default function App() {
                     type="text"
                     value={passkeyInput}
                     onChange={(e) => setPasskeyInput(e.target.value)}
-                    placeholder="e.g. SG123"
+                    placeholder="Enter assigned office passkey (e.g. SG123)"
                     className="w-full bg-slate-50 border border-slate-200 rounded-xl pl-10 pr-4 py-2.5 text-sm font-bold font-mono text-slate-800 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:bg-white transition-all"
                   />
                 </div>
@@ -858,46 +1448,13 @@ export default function App() {
               </button>
             </form>
 
-            <div className="border-t border-slate-100 pt-5 space-y-3.5">
-              <span className="text-[10px] font-extrabold text-slate-400 uppercase tracking-wider block font-mono">
-                Corporate Directory (For Testing)
-              </span>
-
-              {offices.length === 0 ? (
-                <div className="text-[10px] text-slate-400 italic">No offices registered. Activate Admin mode to construct one!</div>
-              ) : (
-                <div className="space-y-2 max-h-[160px] overflow-y-auto pr-1">
-                  {offices.map(o => (
-                    <div 
-                      key={o.id} 
-                      onClick={() => {
-                        setPasskeyInput(o.passkey);
-                        setPasskeyError('');
-                      }}
-                      className="flex items-center justify-between bg-slate-50/50 hover:bg-indigo-50/30 border border-slate-200/50 rounded-xl p-2.5 cursor-pointer transition-colors"
-                    >
-                      <div className="space-y-0.5 text-left max-w-[200px]">
-                        <span className="font-bold text-slate-800 text-xs block truncate">{o.name}</span>
-                        <span className="text-[9px] text-slate-400 flex items-center gap-0.5 truncate">
-                          <MapPin className="w-2.5 h-2.5" /> {o.location}
-                        </span>
-                      </div>
-                      <span className="bg-amber-100/80 text-amber-800 border border-amber-200 font-mono text-[9px] font-bold px-2 py-0.5 rounded-lg">
-                        {o.passkey}
-                      </span>
-                    </div>
-                  ))}
-                </div>
-              )}
-            </div>
-
-            <div className="text-center pt-2">
+            <div className="border-t border-slate-100 pt-4 text-center">
               <button
-                onClick={() => setShowAdminModal(true)}
-                className="text-[10px] text-slate-400 hover:text-indigo-600 font-bold underline cursor-pointer flex items-center gap-1 mx-auto"
+                onClick={handleOpenAdminConsole}
+                className="text-[11px] text-slate-500 hover:text-indigo-600 font-bold transition-colors cursor-pointer flex items-center gap-1.5 mx-auto"
               >
-                <ShieldCheck className="w-3.5 h-3.5" />
-                <span>Login as Administrator</span>
+                <ShieldCheck className="w-4 h-4 text-indigo-600" />
+                <span>Super Administrator Portal</span>
               </button>
             </div>
 
@@ -909,7 +1466,7 @@ export default function App() {
         <main className="flex-1 max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6 w-full space-y-4">
           
           {/* Header Card with Date & View Mode Switcher */}
-          <div className="flex flex-col md:flex-row items-stretch md:items-center justify-between gap-3 bg-white border border-slate-200 rounded-lg p-4 shadow-sm">
+          <div className="flex flex-col md:flex-row items-stretch md:items-center justify-between gap-3 bg-white border border-slate-200 rounded-xl p-4 shadow-2xs">
             <div>
               <h2 className="text-base font-bold font-sans text-slate-800 tracking-tight flex items-center gap-2 uppercase">
                 <Building2 className="w-4.5 h-4.5 text-indigo-600" />
@@ -920,214 +1477,182 @@ export default function App() {
               </p>
             </div>
 
-            <div className="flex items-center gap-2.5 flex-wrap">
-              {/* View Switcher Segmented Tabs: Day | Week | Month */}
+            <div className="flex items-center gap-2 flex-wrap">
+              
+              {/* View Mode Switcher Tabs */}
               <div className="flex items-center bg-slate-100 p-1 rounded-lg border border-slate-200">
                 <button
                   type="button"
                   onClick={() => setViewMode('day')}
-                  className={`flex items-center gap-1.5 px-3 py-1 text-xs font-bold rounded-md transition-all cursor-pointer ${
+                  className={`flex items-center gap-1 px-3 py-1.5 text-xs font-bold rounded-md transition-all cursor-pointer ${
                     viewMode === 'day'
-                      ? 'bg-white text-indigo-600 shadow-xs ring-1 ring-slate-200'
-                      : 'text-slate-600 hover:text-slate-900 hover:bg-slate-200/50'
+                      ? 'bg-white text-indigo-600 shadow-2xs ring-1 ring-slate-200'
+                      : 'text-slate-600 hover:text-slate-900'
                   }`}
                 >
-                  <Clock className="w-3.5 h-3.5" />
-                  <span>Day</span>
+                  <CalendarDays className="w-3.5 h-3.5" />
+                  <span>Day View</span>
                 </button>
                 <button
                   type="button"
                   onClick={() => setViewMode('week')}
-                  className={`flex items-center gap-1.5 px-3 py-1 text-xs font-bold rounded-md transition-all cursor-pointer ${
+                  className={`flex items-center gap-1 px-3 py-1.5 text-xs font-bold rounded-md transition-all cursor-pointer ${
                     viewMode === 'week'
-                      ? 'bg-white text-indigo-600 shadow-xs ring-1 ring-slate-200'
-                      : 'text-slate-600 hover:text-slate-900 hover:bg-slate-200/50'
+                      ? 'bg-white text-indigo-600 shadow-2xs ring-1 ring-slate-200'
+                      : 'text-slate-600 hover:text-slate-900'
                   }`}
                 >
                   <CalendarRange className="w-3.5 h-3.5" />
-                  <span>Week</span>
+                  <span>Weekly View</span>
                 </button>
                 <button
                   type="button"
                   onClick={() => setViewMode('month')}
-                  className={`flex items-center gap-1.5 px-3 py-1 text-xs font-bold rounded-md transition-all cursor-pointer ${
+                  className={`flex items-center gap-1 px-3 py-1.5 text-xs font-bold rounded-md transition-all cursor-pointer ${
                     viewMode === 'month'
-                      ? 'bg-white text-indigo-600 shadow-xs ring-1 ring-slate-200'
-                      : 'text-slate-600 hover:text-slate-900 hover:bg-slate-200/50'
+                      ? 'bg-white text-indigo-600 shadow-2xs ring-1 ring-slate-200'
+                      : 'text-slate-600 hover:text-slate-900'
                   }`}
                 >
                   <Calendar className="w-3.5 h-3.5" />
-                  <span>Month</span>
+                  <span>Monthly View</span>
                 </button>
               </div>
 
-              {/* Date Input */}
-              <div className="flex items-center gap-2 bg-slate-50 border border-slate-200 rounded p-1.5 shrink-0">
-                <CalendarDays className="w-3.5 h-3.5 text-slate-400 ml-1" />
+              {/* Date picker */}
+              <div className="flex items-center gap-1 bg-slate-50 border border-slate-200 rounded-lg px-2.5 py-1 text-xs">
+                <CalendarDays className="w-3.5 h-3.5 text-slate-500" />
                 <input
                   type="date"
                   value={selectedDate}
                   onChange={(e) => setSelectedDate(e.target.value)}
-                  className="bg-transparent border-0 text-xs font-bold text-slate-700 focus:outline-none focus:ring-0 cursor-pointer"
+                  className="bg-transparent text-slate-800 font-bold focus:outline-none cursor-pointer"
                 />
-                <span className="text-[10px] font-mono bg-indigo-50 text-indigo-700 px-2 py-0.5 rounded font-black uppercase hidden sm:inline">
-                  {formatFriendlyDate(selectedDate)}
-                </span>
               </div>
+
             </div>
           </div>
 
-          {/* Floors Navigator Map */}
-          <FloorSelector 
-            selectedFloor={selectedFloor} 
+          {/* Level / Floor Selector Bar */}
+          <FloorSelector
+            floors={activeOffice.floors}
+            selectedFloor={selectedFloor}
             onSelectFloor={setSelectedFloor}
             rooms={currentOfficeRooms}
             bookings={currentOfficeBookings}
             selectedDate={selectedDate}
-            floors={activeOffice.floors}
           />
 
-          {/* Primary Layout Grid */}
-          <div className="grid grid-cols-1 lg:grid-cols-12 gap-4 items-start">
-            
-            {/* Catalog list + Filters (Left Column) */}
-            <div className="lg:col-span-4 space-y-4">
+          {/* Search, Filter & Quick-Stats Bar */}
+          <div className="bg-white border border-slate-200 rounded-xl p-3.5 shadow-2xs space-y-3">
+            <div className="flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3">
               
-              {/* Filter tools */}
-              <div className="bg-white border border-slate-200 rounded-lg p-4 shadow-sm space-y-4">
-                <div className="flex items-center justify-between border-b border-slate-100 pb-2">
-                  <span className="text-xs font-bold text-slate-800 flex items-center gap-1.5 font-sans uppercase tracking-tight">
-                    <Filter className="w-3.5 h-3.5 text-indigo-600" />
-                    Specifications Filters
-                  </span>
-                  {(searchQuery || capacityFilter !== 'all' || selectedAmenities.length > 0) && (
-                    <button
-                      onClick={() => {
-                        setSearchQuery('');
-                        setCapacityFilter('all');
-                        setSelectedAmenities([]);
-                      }}
-                      className="text-[9px] font-black uppercase tracking-wider text-slate-400 hover:text-indigo-600 transition-colors"
-                    >
-                      Clear Filters
-                    </button>
-                  )}
-                </div>
-
-                <div className="relative">
-                  <Search className="w-3.5 h-3.5 text-slate-400 absolute left-2.5 top-2" />
-                  <input
-                    type="text"
-                    value={searchQuery}
-                    onChange={(e) => setSearchQuery(e.target.value)}
-                    placeholder="Search room name..."
-                    className="w-full border border-slate-200 rounded pl-8 pr-2.5 py-1 text-xs text-slate-700 placeholder-slate-400 focus:outline-none focus:ring-1 focus:ring-indigo-500"
-                  />
-                </div>
-
-                {/* Capacity segmented buttons */}
-                <div className="space-y-1.5">
-                  <label className="text-[10px] font-bold text-slate-500 font-sans uppercase tracking-wider">
-                    Room Capacity
-                  </label>
-                  <div className="grid grid-cols-4 gap-1">
-                    {[
-                      { id: 'all', label: 'All' },
-                      { id: 'small', label: '1-4' },
-                      { id: 'medium', label: '5-12' },
-                      { id: 'large', label: '13+' }
-                    ].map((btn) => (
-                      <button
-                        key={btn.id}
-                        type="button"
-                        onClick={() => setCapacityFilter(btn.id)}
-                        className={`py-1 text-[11px] font-bold rounded transition-colors cursor-pointer ${
-                          capacityFilter === btn.id
-                            ? 'bg-indigo-600 text-white shadow-xs'
-                            : 'bg-slate-100 hover:bg-slate-200 text-slate-600'
-                        }`}
-                      >
-                        {btn.label}
-                      </button>
-                    ))}
-                  </div>
-                </div>
-
-                {/* Dynamic Amenities Checkbox List */}
-                {allUniqueAmenities.length > 0 && (
-                  <div className="space-y-1.5 pt-2 border-t border-slate-100">
-                    <label className="text-[10px] font-bold text-slate-500 font-sans uppercase tracking-wider">
-                      Included Amenities
-                    </label>
-                    <div className="grid grid-cols-1 gap-1 max-h-40 overflow-y-auto pr-1">
-                      {allUniqueAmenities.map((amenity) => {
-                        const isChecked = selectedAmenities.includes(amenity);
-                        return (
-                          <button
-                            key={amenity}
-                            type="button"
-                            onClick={() => handleAmenityToggle(amenity)}
-                            className={`flex items-center justify-between px-2 py-1 rounded text-left transition-colors cursor-pointer ${
-                              isChecked ? 'bg-indigo-50 text-indigo-800 font-semibold' : 'hover:bg-slate-50 text-slate-600'
-                            }`}
-                          >
-                            <span className="text-[11px] truncate">{amenity}</span>
-                            <span className={`w-3.5 h-3.5 rounded border flex items-center justify-center text-[9px] ${
-                              isChecked ? 'bg-indigo-600 border-indigo-600 text-white' : 'border-slate-300'
-                            }`}>
-                              {isChecked ? '✓' : ''}
-                            </span>
-                          </button>
-                        );
-                      })}
-                    </div>
-                  </div>
-                )}
+              {/* Search */}
+              <div className="relative flex-1">
+                <Search className="w-4 h-4 text-slate-400 absolute left-3 top-2.5" />
+                <input
+                  type="text"
+                  placeholder="Search meeting spaces by name or features..."
+                  value={searchQuery}
+                  onChange={(e) => setSearchQuery(e.target.value)}
+                  className="w-full bg-slate-50 border border-slate-200 rounded-lg pl-9 pr-3.5 py-1.5 text-xs text-slate-800 placeholder-slate-400 focus:outline-none focus:ring-1 focus:ring-indigo-500"
+                />
               </div>
 
-              {/* Room Cards List for Floor */}
-              <div className="space-y-3">
-                <div className="flex items-center justify-between px-1">
-                  <span className="text-[11px] font-bold text-slate-500 uppercase tracking-wider font-mono">
-                    Floor {selectedFloor} Spaces ({filteredRooms.length})
-                  </span>
+              {/* Capacity Filter */}
+              <div className="flex items-center gap-2">
+                <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider font-mono">
+                  Room Size:
+                </span>
+                <div className="flex items-center bg-slate-100 p-0.5 rounded-lg border border-slate-200">
+                  {['all', 'small', 'medium', 'large'].map((cap) => (
+                    <button
+                      key={cap}
+                      onClick={() => setCapacityFilter(cap)}
+                      className={`px-2.5 py-1 text-[10px] font-bold uppercase rounded transition-all cursor-pointer ${
+                        capacityFilter === cap
+                          ? 'bg-white text-indigo-600 shadow-2xs'
+                          : 'text-slate-500 hover:text-slate-800'
+                      }`}
+                    >
+                      {cap}
+                    </button>
+                  ))}
                 </div>
-
-                {filteredRooms.length === 0 ? (
-                  <div className="bg-white border border-dashed border-slate-300 rounded-lg p-6 text-center space-y-2">
-                    <div className="w-8 h-8 bg-slate-100 rounded-full flex items-center justify-center mx-auto text-slate-400">
-                      <Filter className="w-4 h-4" />
-                    </div>
-                    <p className="text-xs font-bold text-slate-600">No rooms match filter criteria</p>
-                    <p className="text-[10px] text-slate-400">Try clearing amenity tags or switching floors.</p>
-                  </div>
-                ) : (
-                  <div className="space-y-3">
-                    {filteredRooms.map(room => (
-                      <RoomCard
-                        key={room.id}
-                        room={room}
-                        bookings={currentOfficeBookings}
-                        selectedDate={selectedDate}
-                        onBookClick={handleRoomBookClick}
-                      />
-                    ))}
-                  </div>
-                )}
               </div>
 
             </div>
 
-            {/* Matrix & Timelines (Right Column) */}
-            <div className="lg:col-span-8 space-y-4">
+            {/* Amenities Checklist Tags */}
+            {allUniqueAmenities.length > 0 && (
+              <div className="flex items-center gap-1.5 flex-wrap pt-2 border-t border-slate-100 text-xs">
+                <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider font-mono mr-1">
+                  Amenities:
+                </span>
+                {allUniqueAmenities.map((amenity) => {
+                  const isSelected = selectedAmenities.includes(amenity);
+                  return (
+                    <button
+                      key={amenity}
+                      onClick={() => handleAmenityToggle(amenity)}
+                      className={`text-[10px] font-mono px-2 py-0.5 rounded-md border transition-all cursor-pointer ${
+                        isSelected
+                          ? 'bg-indigo-50 text-indigo-700 border-indigo-300 font-bold shadow-2xs'
+                          : 'bg-white text-slate-600 border-slate-200 hover:border-slate-300'
+                      }`}
+                    >
+                      {amenity}
+                    </button>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+
+          {/* Main Content Layout */}
+          <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
+            
+            {/* Left: Meeting Rooms Grid (Floor Context) */}
+            <div className="lg:col-span-4 space-y-3">
+              <div className="flex items-center justify-between">
+                <h3 className="font-sans font-bold text-slate-900 text-xs tracking-tight uppercase flex items-center gap-1.5">
+                  <span>Level {selectedFloor} Spaces</span>
+                  <span className="text-[10px] font-mono text-slate-400 font-normal">
+                    ({filteredRooms.length} available)
+                  </span>
+                </h3>
+              </div>
+
+              {filteredRooms.length === 0 ? (
+                <div className="bg-white border border-dashed border-slate-200 rounded-xl p-8 text-center space-y-2">
+                  <Building2 className="w-8 h-8 text-slate-300 mx-auto" />
+                  <p className="text-xs font-bold text-slate-600">No rooms match filter</p>
+                  <p className="text-[10px] text-slate-400">Clear your search query or choose another floor level.</p>
+                </div>
+              ) : (
+                <div className="space-y-3 max-h-[620px] overflow-y-auto pr-1">
+                  {filteredRooms.map((room) => (
+                    <RoomCard
+                      key={room.id}
+                      room={room}
+                      selectedDate={selectedDate}
+                      bookings={currentOfficeBookings.filter(b => b.roomId === room.id && b.date === selectedDate)}
+                      onBookClick={() => handleRoomBookClick(room)}
+                    />
+                  ))}
+                </div>
+              )}
+            </div>
+
+            {/* Right: Master Availability View (Day, Weekly, Monthly) + My Reservations */}
+            <div className="lg:col-span-8 space-y-6">
               
               {/* Day View */}
               {viewMode === 'day' && (
                 <BookingTimeline
                   rooms={filteredRooms}
-                  bookings={currentOfficeBookings}
+                  bookings={currentOfficeBookings.filter(b => b.date === selectedDate)}
                   selectedDate={selectedDate}
-                  onSelectDate={setSelectedDate}
                   onCellClick={handleTimelineCellClick}
                   onBookingClick={handleBookingPillClick}
                   currentUserUid={user?.uid}
@@ -1135,7 +1660,7 @@ export default function App() {
                 />
               )}
 
-              {/* Week View */}
+              {/* Weekly View */}
               {viewMode === 'week' && (
                 <WeeklyScheduleView
                   rooms={filteredRooms}
@@ -1153,7 +1678,7 @@ export default function App() {
                 />
               )}
 
-              {/* Month View */}
+              {/* Monthly View */}
               {viewMode === 'month' && (
                 <MonthlyAvailabilityView
                   rooms={filteredRooms}
@@ -1171,6 +1696,7 @@ export default function App() {
                 />
               )}
 
+              {/* My Personal Reservations */}
               <MyBookings
                 bookings={currentOfficeBookings}
                 rooms={rooms}
@@ -1200,11 +1726,25 @@ export default function App() {
         currentUser={user ? { displayName: user.displayName, email: user.email, uid: user.uid } : null}
         bookings={currentOfficeBookings}
         googleSyncAvailable={!!googleToken}
+        adminEmail={ADMIN_EMAIL}
       />
 
-      {/* Admin Panel Authorization Modal prompt */}
+      {/* Booking Authorization Gate Modal (for unapproved / token users) */}
+      <BookingAuthModal
+        isOpen={isAuthModalOpen}
+        onClose={() => {
+          setIsAuthModalOpen(false);
+          setPendingBookingIntent(null);
+        }}
+        currentUserEmail={user?.email || null}
+        onLoginGoogle={handleLoginGoogle}
+        onVerifyToken={handleVerifySecretToken}
+        adminEmail={ADMIN_EMAIL}
+      />
+
+      {/* Admin Panel Access Restriction Modal (When non-admin clicks Admin) */}
       <AnimatePresence>
-        {showAdminModal && (
+        {showAdminRestrictionModal && (
           <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-xs z-50 flex items-center justify-center p-4">
             <motion.div
               initial={{ scale: 0.95, opacity: 0 }}
@@ -1215,63 +1755,48 @@ export default function App() {
               <div className="flex items-start justify-between">
                 <div className="flex items-center gap-2">
                   <ShieldAlert className="w-5 h-5 text-amber-600" />
-                  <h3 className="font-sans font-black text-slate-800 text-sm tracking-tight uppercase">Admin Authorization</h3>
+                  <h3 className="font-sans font-black text-slate-800 text-sm tracking-tight uppercase">Admin Access Restricted</h3>
                 </div>
                 <button
-                  onClick={() => {
-                    setShowAdminModal(false);
-                    setAdminPasswordInput('');
-                    setAdminAuthError('');
-                  }}
-                  className="p-1 hover:bg-slate-100 rounded-lg text-slate-400"
+                  onClick={() => setShowAdminRestrictionModal(false)}
+                  className="p-1 hover:bg-slate-100 rounded-lg text-slate-400 cursor-pointer"
                 >
                   <X className="w-4 h-4" />
                 </button>
               </div>
 
-              <p className="text-[11px] text-slate-500 leading-relaxed font-medium">
-                Enter the Workspace matrix administration password to configure offices, modify floor layouts, and manage global specifications.
-              </p>
-
-              <form onSubmit={handleAdminAuthSubmit} className="space-y-4">
-                <div>
-                  <label className="block text-[10px] font-bold text-slate-500 uppercase tracking-wider mb-1 font-mono">
-                    Admin Password
-                  </label>
-                  <input
-                    type="password"
-                    value={adminPasswordInput}
-                    onChange={(e) => setAdminPasswordInput(e.target.value)}
-                    placeholder="Enter default: admin123"
-                    className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3.5 py-2 text-xs font-bold font-mono text-slate-800 focus:outline-none focus:ring-2 focus:ring-indigo-500"
-                  />
-                  {adminAuthError && (
-                    <p className="text-[9px] text-rose-600 font-bold mt-1.5 flex items-center gap-1">
-                      <AlertTriangle className="w-3 h-3 text-rose-600" /> {adminAuthError}
-                    </p>
-                  )}
+              <div className="space-y-2 text-xs text-slate-600 leading-relaxed font-sans">
+                <p>
+                  System administrative controls and configuration suite are strictly restricted to the authorized administrator:
+                </p>
+                <div className="bg-amber-50 border border-amber-200 rounded-xl p-2.5 font-mono text-amber-900 font-bold text-center select-all">
+                  {ADMIN_EMAIL}
                 </div>
+                <p className="text-[11px] text-slate-400 pt-1">
+                  Please sign in using your official Google Administrator account to access workspace management, staff whitelisting, and audit logs.
+                </p>
+              </div>
 
-                <div className="flex gap-2">
-                  <button
-                    type="submit"
-                    className="flex-1 bg-slate-900 hover:bg-black text-white font-black text-[11px] uppercase py-2.5 rounded-xl transition-colors shadow-sm cursor-pointer"
-                  >
-                    Authorize Session
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setShowAdminModal(false);
-                      setAdminPasswordInput('');
-                      setAdminAuthError('');
-                    }}
-                    className="bg-slate-100 hover:bg-slate-200 text-slate-700 px-4 rounded-xl text-[11px] font-bold transition-colors cursor-pointer"
-                  >
-                    Cancel
-                  </button>
-                </div>
-              </form>
+              <div className="flex flex-col gap-2 pt-2">
+                <button
+                  type="button"
+                  onClick={async () => {
+                    setShowAdminRestrictionModal(false);
+                    await handleLoginGoogle();
+                  }}
+                  className="w-full bg-indigo-600 hover:bg-indigo-700 text-white font-extrabold text-xs uppercase py-2.5 rounded-xl transition-colors shadow-xs flex items-center justify-center gap-2 cursor-pointer"
+                >
+                  <Shield className="w-3.5 h-3.5" />
+                  <span>Sign In as Administrator</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setShowAdminRestrictionModal(false)}
+                  className="w-full bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-bold py-2 rounded-xl transition-colors cursor-pointer"
+                >
+                  Cancel
+                </button>
+              </div>
             </motion.div>
           </div>
         )}

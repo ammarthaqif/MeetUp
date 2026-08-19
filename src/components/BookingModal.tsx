@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { X, Calendar, Clock, Info, UserCheck, AlertTriangle, Users, Mail, Plus, Trash2 } from 'lucide-react';
+import { X, Calendar, Clock, Info, UserCheck, AlertTriangle, Users, Mail, Plus, Trash2, Lock, ShieldCheck } from 'lucide-react';
 import { Room, Booking } from '../types';
 import { isRoomAvailable, timeToMinutes, minutesToTime } from '../utils';
 
@@ -15,6 +15,7 @@ interface BookingModalProps {
   currentUser: { displayName: string | null; email: string | null; uid: string } | null;
   bookings: Booking[]; // Used for live conflict checking
   googleSyncAvailable: boolean;
+  adminEmail?: string;
 }
 
 export const BookingModal: React.FC<BookingModalProps> = ({
@@ -29,6 +30,7 @@ export const BookingModal: React.FC<BookingModalProps> = ({
   currentUser,
   bookings,
   googleSyncAvailable,
+  adminEmail = 'ammarthaqif.ar@gmail.com',
 }) => {
   const [roomId, setRoomId] = useState('');
   const [date, setDate] = useState('');
@@ -45,6 +47,16 @@ export const BookingModal: React.FC<BookingModalProps> = ({
   const [isSaving, setIsSaving] = useState(false);
   const [errorMessage, setErrorMessage] = useState('');
   const [isConflict, setIsConflict] = useState(false);
+
+  // Ownership check: user can only edit/cancel if they are the creator or the verified admin
+  const isOwner = !editingBooking || (
+    (currentUser && (
+      (currentUser.uid && editingBooking.hostUid === currentUser.uid) ||
+      (currentUser.email && editingBooking.hostEmail?.toLowerCase() === currentUser.email.toLowerCase())
+    )) ||
+    (currentUser?.email?.toLowerCase() === adminEmail.toLowerCase())
+  );
+
 
   // Multi-day states
   const [isMultiDay, setIsMultiDay] = useState(false);
@@ -310,11 +322,23 @@ export const BookingModal: React.FC<BookingModalProps> = ({
         {/* Header */}
         <div className="bg-slate-50 border-b border-slate-100 px-6 py-5 flex items-center justify-between">
           <div>
-            <h3 className="font-sans font-bold text-slate-950 text-lg">
-              {editingBooking ? 'Edit Meeting Room Reservation' : 'Book a Meeting Room'}
+            <h3 className="font-sans font-bold text-slate-950 text-lg flex items-center gap-2">
+              {editingBooking ? (
+                isOwner ? 'Edit Meeting Room Reservation' : 'Meeting Reservation Details'
+              ) : (
+                'Book a Meeting Room'
+              )}
+              {editingBooking && !isOwner && (
+                <span className="text-[10px] bg-slate-200 text-slate-700 font-mono px-2 py-0.5 rounded font-bold uppercase flex items-center gap-1">
+                  <Lock className="w-2.5 h-2.5" /> Read Only
+                </span>
+              )}
             </h3>
             <p className="text-xs text-slate-500 font-sans mt-0.5">
-              Secure real-time floor availability sync.
+              {editingBooking && !isOwner 
+                ? `Reserved by ${editingBooking.hostName || 'Team Member'}`
+                : 'Secure real-time floor availability sync.'
+              }
             </p>
           </div>
           <button
@@ -327,6 +351,18 @@ export const BookingModal: React.FC<BookingModalProps> = ({
 
         {/* Content - Form */}
         <form onSubmit={handleSubmit} className="p-6 overflow-y-auto space-y-5 flex-1">
+          {editingBooking && !isOwner && (
+            <div className="p-3.5 bg-amber-50/70 border border-amber-200 text-amber-900 text-xs rounded-xl flex items-start gap-2.5">
+              <Lock className="w-4 h-4 text-amber-700 shrink-0 mt-0.5" />
+              <div>
+                <span className="font-bold text-amber-950">Restricted Access (View-Only):</span>
+                <p className="text-[11px] text-amber-800 mt-0.5 leading-relaxed">
+                  This reservation was created by <strong className="text-slate-900">{editingBooking.hostName} ({editingBooking.hostEmail})</strong>. To prevent accidental disruption, only the meeting owner or the administrator (<span className="font-mono text-xs">{adminEmail}</span>) can edit or cancel this booking.
+                </p>
+              </div>
+            </div>
+          )}
+
           {errorMessage && (
             <div className="p-3 bg-rose-50 border border-rose-100 text-rose-700 text-xs rounded-xl flex items-center gap-2">
               <AlertTriangle className="w-4 h-4 shrink-0" />
@@ -641,27 +677,47 @@ export const BookingModal: React.FC<BookingModalProps> = ({
         {/* Footer */}
         <div className="bg-slate-50 border-t border-slate-100 px-6 py-4 flex justify-between items-center shrink-0">
           <div className="flex items-center gap-1.5 text-xs text-slate-400 font-mono">
-            <Info className="w-3.5 h-3.5" />
-            <span>Overlaps fully checked</span>
+            {editingBooking && !isOwner ? (
+              <span className="flex items-center gap-1 text-slate-500 font-medium">
+                <Lock className="w-3.5 h-3.5" /> Read-Only Mode
+              </span>
+            ) : (
+              <>
+                <Info className="w-3.5 h-3.5" />
+                <span>Overlaps fully checked</span>
+              </>
+            )}
           </div>
           <div className="flex gap-2">
-            <button
-              type="button"
-              onClick={onClose}
-              className="bg-white border border-slate-200 hover:bg-slate-50 text-slate-700 font-bold px-4 py-2 rounded-xl text-xs transition-colors cursor-pointer"
-            >
-              Cancel
-            </button>
-            <button
-              type="button"
-              onClick={handleSubmit}
-              disabled={isSaving || isConflict || !!errorMessage}
-              className={`bg-indigo-600 hover:bg-indigo-700 text-white font-bold px-5 py-2 rounded-xl text-xs shadow-md shadow-indigo-100 transition-colors cursor-pointer ${
-                (isSaving || isConflict || !!errorMessage) ? 'opacity-50 pointer-events-none' : ''
-              }`}
-            >
-              {isSaving ? 'Processing...' : editingBooking ? 'Update Booking' : 'Book Room'}
-            </button>
+            {!isOwner ? (
+              <button
+                type="button"
+                onClick={onClose}
+                className="bg-slate-900 hover:bg-black text-white font-bold px-5 py-2 rounded-xl text-xs transition-colors cursor-pointer"
+              >
+                Close Window
+              </button>
+            ) : (
+              <>
+                <button
+                  type="button"
+                  onClick={onClose}
+                  className="bg-white border border-slate-200 hover:bg-slate-50 text-slate-700 font-bold px-4 py-2 rounded-xl text-xs transition-colors cursor-pointer"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  onClick={handleSubmit}
+                  disabled={isSaving || isConflict || !!errorMessage}
+                  className={`bg-indigo-600 hover:bg-indigo-700 text-white font-bold px-5 py-2 rounded-xl text-xs shadow-md shadow-indigo-100 transition-colors cursor-pointer ${
+                    (isSaving || isConflict || !!errorMessage) ? 'opacity-50 pointer-events-none' : ''
+                  }`}
+                >
+                  {isSaving ? 'Processing...' : editingBooking ? 'Update Booking' : 'Book Room'}
+                </button>
+              </>
+            )}
           </div>
         </div>
 

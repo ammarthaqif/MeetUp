@@ -14,6 +14,7 @@ interface NavbarProps {
   isAdminMode?: boolean;
   onOpenAdminAuth?: () => void;
   onExitAdminMode?: () => void;
+  adminEmail?: string;
 }
 
 export const Navbar: React.FC<NavbarProps> = ({
@@ -27,7 +28,10 @@ export const Navbar: React.FC<NavbarProps> = ({
   isAdminMode,
   onOpenAdminAuth,
   onExitAdminMode,
+  adminEmail = 'ammarthaqif.ar@gmail.com',
 }) => {
+  const isUserAdmin = user?.email?.toLowerCase() === adminEmail.toLowerCase();
+
   return (
     <header id="app-header" className="bg-white border-b border-slate-200 sticky top-0 z-40 shadow-sm">
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-14 flex items-center justify-between">
@@ -63,18 +67,20 @@ export const Navbar: React.FC<NavbarProps> = ({
         {/* User / Authentication Status */}
         <div className="flex items-center gap-3">
           
-          {/* Admin console button */}
+          {/* Admin console button: only shows if admin mode or authorized admin */}
           {onOpenAdminAuth && (
             <button
               onClick={isAdminMode ? onExitAdminMode : onOpenAdminAuth}
               className={`px-2.5 py-1.5 rounded text-xs font-bold transition-all cursor-pointer flex items-center gap-1 border ${
                 isAdminMode 
                   ? 'bg-amber-950 text-amber-300 border-amber-900 hover:bg-amber-900' 
-                  : 'bg-slate-100 hover:bg-slate-200 text-slate-750 border-slate-200'
+                  : isUserAdmin
+                    ? 'bg-indigo-50 hover:bg-indigo-100 text-indigo-700 border-indigo-200 shadow-2xs'
+                    : 'bg-slate-100 hover:bg-slate-200 text-slate-700 border-slate-200'
               }`}
             >
-              <ShieldCheck className="w-3.5 h-3.5" />
-              <span className="hidden xs:inline">{isAdminMode ? 'Exit Admin' : 'Admin Control'}</span>
+              <ShieldCheck className="w-3.5 h-3.5 text-indigo-600" />
+              <span className="hidden xs:inline">{isAdminMode ? 'Exit Admin' : isUserAdmin ? 'Admin Suite' : 'Admin'}</span>
             </button>
           )}
 
@@ -83,11 +89,18 @@ export const Navbar: React.FC<NavbarProps> = ({
           {user ? (
             <div className="flex items-center gap-2.5 pl-1">
               <div className="text-right hidden sm:block">
-                <p className="text-xs font-bold text-slate-800 leading-tight">
-                  {user.displayName || 'Staff Member'}
-                </p>
+                <div className="flex items-center justify-end gap-1.5">
+                  <p className="text-xs font-bold text-slate-800 leading-tight truncate max-w-[140px]">
+                    {user.displayName || user.email?.split('@')[0] || 'Staff Member'}
+                  </p>
+                  {isUserAdmin && (
+                    <span className="text-[8px] font-mono bg-amber-100 text-amber-900 px-1.5 py-0.5 rounded font-black uppercase">
+                      Admin
+                    </span>
+                  )}
+                </div>
                 <p className="text-[9px] text-slate-400 font-mono">
-                  {googleToken ? 'G-Cal Connected' : 'Local Access Only'}
+                  {user.email}
                 </p>
               </div>
 
