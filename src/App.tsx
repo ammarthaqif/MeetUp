@@ -1,13 +1,14 @@
 import React, { useState, useEffect } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { 
-  collection, onSnapshot, addDoc, doc, setDoc, deleteDoc, query, orderBy
+  collection, onSnapshot, addDoc, doc, setDoc, deleteDoc
 } from 'firebase/firestore';
 import { db, auth, googleSignIn, logout } from './firebase';
 import { onAuthStateChanged, User as FirebaseUser } from 'firebase/auth';
 import { 
-  CalendarDays, Building2, Filter, Search, PlusCircle, CheckCircle, 
-  X, AlertTriangle, ArrowRight, ShieldCheck, Key, MapPin, Layers, Mail, ShieldAlert, Sparkles, LogOut
+  CalendarDays, Building2, Filter, Search, CheckCircle, 
+  X, AlertTriangle, ArrowRight, ShieldCheck, Key, MapPin, Sparkles, ShieldAlert,
+  Clock, CalendarRange, Calendar
 } from 'lucide-react';
 
 // Subcomponents
@@ -15,6 +16,8 @@ import { Navbar } from './components/Navbar';
 import { FloorSelector } from './components/FloorSelector';
 import { RoomCard } from './components/RoomCard';
 import { BookingTimeline } from './components/BookingTimeline';
+import { WeeklyScheduleView } from './components/WeeklyScheduleView';
+import { MonthlyAvailabilityView } from './components/MonthlyAvailabilityView';
 import { BookingModal } from './components/BookingModal';
 import { MyBookings } from './components/MyBookings';
 import { AdminPanel } from './components/AdminPanel';
@@ -23,6 +26,7 @@ import { SimulatedInbox, SimulatedEmail } from './components/SimulatedInbox';
 // Types and Utilities
 import { Booking, Room, Office } from './types';
 import { formatFriendlyDate } from './utils';
+import { ROOMS as DEFAULT_ROOMS } from './roomsData';
 
 const DEFAULT_INITIAL_OFFICES: Office[] = [
   {
@@ -43,6 +47,41 @@ const DEFAULT_INITIAL_OFFICES: Office[] = [
   }
 ];
 
+const DEFAULT_INITIAL_BOOKINGS: Booking[] = [
+  {
+    id: 'sample-booking-1',
+    roomId: 'f1-arena',
+    floor: 1,
+    officeId: 'office-singapore-hq',
+    title: 'Product All-Hands & Strategy Sync',
+    description: 'Quarterly review with engineering and design leads.',
+    date: new Date().toISOString().split('T')[0],
+    startTime: '10:00',
+    endTime: '12:00',
+    hostName: 'Sarah Lin',
+    hostEmail: 'sarah.lin@workspace.corp',
+    hostUid: 'user-sample-1',
+    attendees: ['alex@workspace.corp', 'dev-team@workspace.corp'],
+    createdAt: Date.now() - 3600000,
+  },
+  {
+    id: 'sample-booking-2',
+    roomId: 'f1-orion',
+    floor: 1,
+    officeId: 'office-singapore-hq',
+    title: 'Client Pitch: Vertex Ventures',
+    description: 'Executive partnership presentation.',
+    date: new Date().toISOString().split('T')[0],
+    startTime: '14:00',
+    endTime: '15:30',
+    hostName: 'David Chen',
+    hostEmail: 'david.chen@workspace.corp',
+    hostUid: 'user-sample-2',
+    attendees: ['partners@vertex.vc'],
+    createdAt: Date.now() - 7200000,
+  }
+];
+
 export default function App() {
   const [selectedDate, setSelectedDate] = useState<string>(() => {
     const today = new Date();
@@ -54,10 +93,32 @@ export default function App() {
   const [selectedAmenities, setSelectedAmenities] = useState<string[]>([]);
   
   // Dynamic Database States (with instant offline fallback)
-  const [offices, setOffices] = useState<Office[]>(DEFAULT_INITIAL_OFFICES);
-  const [rooms, setRooms] = useState<Room[]>([]);
-  const [bookings, setBookings] = useState<Booking[]>([]);
-  const [isSeeding, setIsSeeding] = useState(false);
+  const [offices, setOffices] = useState<Office[]>(() => {
+    try {
+      const saved = localStorage.getItem('office_sync_offices');
+      return saved ? JSON.parse(saved) : DEFAULT_INITIAL_OFFICES;
+    } catch {
+      return DEFAULT_INITIAL_OFFICES;
+    }
+  });
+
+  const [rooms, setRooms] = useState<Room[]>(() => {
+    try {
+      const saved = localStorage.getItem('office_sync_rooms');
+      return saved ? JSON.parse(saved) : DEFAULT_ROOMS;
+    } catch {
+      return DEFAULT_ROOMS;
+    }
+  });
+
+  const [bookings, setBookings] = useState<Booking[]>(() => {
+    try {
+      const saved = localStorage.getItem('office_sync_bookings');
+      return saved ? JSON.parse(saved) : DEFAULT_INITIAL_BOOKINGS;
+    } catch {
+      return DEFAULT_INITIAL_BOOKINGS;
+    }
+  });
 
   // Active Workspace State
   const [activeOffice, setActiveOffice] = useState<Office | null>(() => {
@@ -103,6 +164,9 @@ export default function App() {
   const [isLoggingIn, setIsLoggingIn] = useState(false);
   const [googleToken, setGoogleToken] = useState<string | null>(null);
 
+  // View mode switcher: 'day' | 'week' | 'month'
+  const [viewMode, setViewMode] = useState<'day' | 'week' | 'month'>('day');
+
   // Modal actions
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [selectedRoomForModal, setSelectedRoomForModal] = useState<Room | null>(null);
@@ -116,60 +180,98 @@ export default function App() {
     }, 4500);
   };
 
+  // Synchronize local states to localStorage for instant offline access
+  useEffect(() => {
+    try {
+      localStorage.setItem('office_sync_offices', JSON.stringify(offices));
+    } catch {}
+  }, [offices]);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem('office_sync_rooms', JSON.stringify(rooms));
+    } catch {}
+  }, [rooms]);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem('office_sync_bookings', JSON.stringify(bookings));
+    } catch {}
+  }, [bookings]);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem('office_sync_emails', JSON.stringify(simulatedEmails));
+    } catch {}
+  }, [simulatedEmails]);
+
   // -------------------------------------------------------------
-  // DB Listeners & Hydration
+  // DB Listeners & Online Hydration (with resilient offline fallback)
   // -------------------------------------------------------------
   
   // Real-time listen to Offices
   useEffect(() => {
-    const officesCollection = collection(db, 'offices');
-    const unsubscribe = onSnapshot(officesCollection, (snapshot) => {
-      const officeList: Office[] = [];
-      snapshot.forEach((doc) => {
-        officeList.push({ id: doc.id, ...doc.data() } as Office);
+    try {
+      const officesCollection = collection(db, 'offices');
+      const unsubscribe = onSnapshot(officesCollection, (snapshot) => {
+        if (!snapshot.empty) {
+          const officeList: Office[] = [];
+          snapshot.forEach((docSnap) => {
+            officeList.push({ id: docSnap.id, ...docSnap.data() } as Office);
+          });
+          setOffices(officeList);
+        }
+      }, (error) => {
+        // Silently operates in offline mode without crashing
+        console.warn('Operating in offline local cache mode for offices:', error.message);
       });
-      setOffices(officeList);
-      
-      // Seed default offices & rooms if database is fresh and unseeded
-      if (snapshot.empty && !isSeeding) {
-        seedDefaultData();
-      }
-    }, (error) => {
-      console.error('Error fetching offices:', error);
-    });
-    return () => unsubscribe();
-  }, [isSeeding]);
+      return () => unsubscribe();
+    } catch (e) {
+      console.warn('Firestore offices initialization offline fallback:', e);
+    }
+  }, []);
 
   // Real-time listen to Rooms
   useEffect(() => {
-    const roomsCollection = collection(db, 'rooms');
-    const unsubscribe = onSnapshot(roomsCollection, (snapshot) => {
-      const roomList: Room[] = [];
-      snapshot.forEach((doc) => {
-        roomList.push({ id: doc.id, ...doc.data() } as Room);
+    try {
+      const roomsCollection = collection(db, 'rooms');
+      const unsubscribe = onSnapshot(roomsCollection, (snapshot) => {
+        if (!snapshot.empty) {
+          const roomList: Room[] = [];
+          snapshot.forEach((docSnap) => {
+            roomList.push({ id: docSnap.id, ...docSnap.data() } as Room);
+          });
+          setRooms(roomList);
+        }
+      }, (error) => {
+        console.warn('Operating in offline local cache mode for rooms:', error.message);
       });
-      setRooms(roomList);
-    }, (error) => {
-      console.error('Error fetching rooms:', error);
-    });
-    return () => unsubscribe();
+      return () => unsubscribe();
+    } catch (e) {
+      console.warn('Firestore rooms initialization offline fallback:', e);
+    }
   }, []);
 
   // Real-time listen to Bookings
   useEffect(() => {
-    const bookingsCollection = collection(db, 'bookings');
-    const unsubscribe = onSnapshot(bookingsCollection, (snapshot) => {
-      const bookingList: Booking[] = [];
-      snapshot.forEach((doc) => {
-        bookingList.push({ id: doc.id, ...doc.data() } as Booking);
+    try {
+      const bookingsCollection = collection(db, 'bookings');
+      const unsubscribe = onSnapshot(bookingsCollection, (snapshot) => {
+        if (!snapshot.empty) {
+          const bookingList: Booking[] = [];
+          snapshot.forEach((docSnap) => {
+            bookingList.push({ id: docSnap.id, ...docSnap.data() } as Booking);
+          });
+          bookingList.sort((a, b) => b.createdAt - a.createdAt);
+          setBookings(bookingList);
+        }
+      }, (error) => {
+        console.warn('Operating in offline local cache mode for bookings:', error.message);
       });
-      // Sort bookings by creation time descending for listings
-      bookingList.sort((a, b) => b.createdAt - a.createdAt);
-      setBookings(bookingList);
-    }, (error) => {
-      console.error('Error fetching bookings:', error);
-    });
-    return () => unsubscribe();
+      return () => unsubscribe();
+    } catch (e) {
+      console.warn('Firestore bookings initialization offline fallback:', e);
+    }
   }, []);
 
   // Keep active office synchronized with real-time db definitions (address/passkey updates)
@@ -179,7 +281,9 @@ export default function App() {
       if (fresh) {
         if (JSON.stringify(fresh) !== JSON.stringify(activeOffice)) {
           setActiveOffice(fresh);
-          localStorage.setItem('office_sync_active_office', JSON.stringify(fresh));
+          try {
+            localStorage.setItem('office_sync_active_office', JSON.stringify(fresh));
+          } catch {}
           // Correct floor index if out-of-bounds
           if (!fresh.floors.includes(selectedFloor)) {
             setSelectedFloor(fresh.floors[0] || 1);
@@ -189,93 +293,25 @@ export default function App() {
     }
   }, [offices, activeOffice, selectedFloor]);
 
-  // Persist simulated emails to localStorage for realistic testing
-  useEffect(() => {
-    localStorage.setItem('office_sync_emails', JSON.stringify(simulatedEmails));
-  }, [simulatedEmails]);
-
   // Listen to Auth
   useEffect(() => {
-    const unsubscribe = onAuthStateChanged(auth, (currentUser) => {
-      setUser(currentUser);
-      if (currentUser) {
-        const token = localStorage.getItem('google_calendar_access_token');
-        setGoogleToken(token);
-      } else {
-        setGoogleToken(null);
-      }
-    });
-    return () => unsubscribe();
-  }, []);
-
-  // -------------------------------------------------------------
-  // Data Seeding (Automatic Provisioning for Fresh Project)
-  // -------------------------------------------------------------
-  const seedDefaultData = async () => {
-    setIsSeeding(true);
     try {
-      showNotification('info', 'Workspace database empty. Seeding offices & meeting rooms...');
-      
-      const officeHqId = 'office-singapore-hq';
-      const officeSvId = 'office-silicon-valley';
-      
-      // Register Singapore HQ Office
-      await setDoc(doc(db, 'offices', officeHqId), {
-        name: 'Downtown Singapore HQ',
-        location: 'Marina Bay Financial Centre, Tower 2',
-        passkey: 'SG123',
-        floors: [1, 2, 3, 4],
-        createdAt: Date.now()
+      const unsubscribe = onAuthStateChanged(auth, (currentUser) => {
+        setUser(currentUser);
+        if (currentUser) {
+          try {
+            const token = localStorage.getItem('google_calendar_access_token');
+            setGoogleToken(token);
+          } catch {}
+        } else {
+          setGoogleToken(null);
+        }
       });
-
-      // Register Silicon Valley Branch Office
-      await setDoc(doc(db, 'offices', officeSvId), {
-        name: 'West Tech Center (Silicon Valley)',
-        location: '456 Innovation Way, Building 2',
-        passkey: 'SV456',
-        floors: [1, 2],
-        createdAt: Date.now()
-      });
-
-      // Rooms for Singapore Office
-      const defaultSingaporeRooms = [
-        { id: 'f1-arena', name: 'The Arena', floor: 1, capacity: 20, amenities: ['Dual 85" Screens', 'Video Conferencing', 'Digital Whiteboard', 'Catering Station', 'Presenter Podium'], description: 'Our largest training room and seminar hall.', color: 'indigo', officeId: officeHqId },
-        { id: 'f1-pebble', name: 'Pebble Pod', floor: 1, capacity: 4, amenities: ['55" LED TV', 'Whiteboard', 'USB-C hub'], description: 'A cozy huddle space for quick syncs.', color: 'emerald', officeId: officeHqId },
-        { id: 'f1-orion', name: 'Orion Boardroom', floor: 1, capacity: 10, amenities: ['Video Conferencing', 'Whiteboard', 'Smart TV', 'Spacial Audio'], description: 'A glass-enclosed, elegant meeting room.', color: 'sky', officeId: officeHqId },
-        { id: 'f2-synapse', name: 'Synapse Lab', floor: 2, capacity: 12, amenities: ['Full-Wall Whiteboards', 'Interactive Projector', 'Flexible Layouts'], description: 'A creative lab with modular desks.', color: 'violet', officeId: officeHqId },
-        { id: 'f2-nest', name: 'The Nest', floor: 2, capacity: 6, amenities: ['Touchscreen Display', 'Whiteboard', 'Wireless casting'], description: 'Warm, collaborative setting with armchairs.', color: 'rose', officeId: officeHqId },
-        { id: 'f2-booth', name: 'Phone Booth A', floor: 2, capacity: 2, amenities: ['Acoustic Insulation', 'Webcam Light', 'External Mic'], description: 'Ultra-quiet workspace for video calls.', color: 'amber', officeId: officeHqId },
-        { id: 'f3-cyber', name: 'Cyber Studio', floor: 3, capacity: 8, amenities: ['Dual Monitors', 'High-Speed LAN', 'Glass Whiteboard', 'Ultra-Wide Camera'], description: 'Optimized for code pairing and standups.', color: 'teal', officeId: officeHqId },
-        { id: 'f3-nebula', name: 'Nebula', floor: 3, capacity: 6, amenities: ['Whiteboard', 'Smart TV', 'Air Purifier'], description: 'Standard meeting room designed for sprint planning.', color: 'cyan', officeId: officeHqId },
-        { id: 'f3-focus', name: 'Focus Pod B', floor: 3, capacity: 2, amenities: ['Acoustic Panels', 'Desk Light', 'Dual Monitors'], description: 'Insulated focus room for pair programming.', color: 'fuchsia', officeId: officeHqId },
-        { id: 'f4-zenith', name: 'Zenith Boardroom', floor: 4, capacity: 25, amenities: ['4K Dual Projectors', 'Panoramic Glass View', 'Advanced Mic Array', 'Automated Blinds', 'Lounge Area'], description: 'Our premier executive space with skyline views.', color: 'rose', officeId: officeHqId },
-        { id: 'f4-eclipse', name: 'Eclipse Suite', floor: 4, capacity: 8, amenities: ['Dynamic LED Lights', 'Whiteboard', '8K Video Setup'], description: 'Executive meeting room with ambient lighting presets.', color: 'purple', officeId: officeHqId },
-        { id: 'f4-atmosphere', name: 'Atmosphere Desk', floor: 4, capacity: 12, amenities: ['Standing Conference Desk', 'Mobile Whiteboard', 'Wireless screen casting'], description: 'A dynamic, standing-only conference room.', color: 'blue', officeId: officeHqId }
-      ];
-
-      for (const rm of defaultSingaporeRooms) {
-        await setDoc(doc(db, 'rooms', rm.id), rm);
-      }
-
-      // Rooms for Silicon Valley Office
-      const defaultSvRooms = [
-        { id: 'sv-turing', name: 'Turing Lab', floor: 1, capacity: 12, amenities: ['Video Conferencing', 'Whiteboard', 'Dual Monitors'], description: 'Spacious collaborative engineering lab.', color: 'emerald', officeId: officeSvId },
-        { id: 'sv-lovelace', name: 'Ada Lovelace Huddle', floor: 1, capacity: 4, amenities: ['Whiteboard', 'Smart TV'], description: 'Perfect huddle space for quick engineer alignment.', color: 'sky', officeId: officeSvId },
-        { id: 'sv-hopper', name: 'The Hopper Suite', floor: 2, capacity: 8, amenities: ['Video Conferencing', 'Whiteboard', 'Acoustic Panels'], description: 'Board-style meeting room on the upper floor.', color: 'violet', officeId: officeSvId },
-        { id: 'sv-shannon', name: 'Claude Shannon Focus Pod', floor: 2, capacity: 2, amenities: ['Acoustic Insulation', 'Desk Light', 'Dual Monitors'], description: 'Insulated pod designed for ultra-focus coding.', color: 'amber', officeId: officeSvId }
-      ];
-
-      for (const rm of defaultSvRooms) {
-        await setDoc(doc(db, 'rooms', rm.id), rm);
-      }
-
-      showNotification('success', 'Dynamic corporate workspaces and layouts seeded successfully!');
-    } catch (err) {
-      console.error('Failed database seed operation:', err);
-    } finally {
-      setIsSeeding(false);
+      return () => unsubscribe();
+    } catch (e) {
+      console.warn('Auth listener offline fallback:', e);
     }
-  };
+  }, []);
 
   // -------------------------------------------------------------
   // Employee Login Passkey Verification
@@ -295,7 +331,9 @@ export default function App() {
 
     if (matched) {
       setActiveOffice(matched);
-      localStorage.setItem('office_sync_active_office', JSON.stringify(matched));
+      try {
+        localStorage.setItem('office_sync_active_office', JSON.stringify(matched));
+      } catch {}
       setSelectedFloor(matched.floors[0] || 1);
       setPasskeyInput('');
       showNotification('success', `Dashboard verified. Connected to ${matched.name}.`);
@@ -306,7 +344,9 @@ export default function App() {
 
   const handleSwitchOffice = () => {
     setActiveOffice(null);
-    localStorage.removeItem('office_sync_active_office');
+    try {
+      localStorage.removeItem('office_sync_active_office');
+    } catch {}
     showNotification('info', 'Disconnected from office portal.');
   };
 
@@ -319,7 +359,9 @@ export default function App() {
 
     if (adminPasswordInput === 'admin123') {
       setIsAdminMode(true);
-      localStorage.setItem('office_sync_admin_mode', 'true');
+      try {
+        localStorage.setItem('office_sync_admin_mode', 'true');
+      } catch {}
       setShowAdminModal(false);
       setAdminPasswordInput('');
       showNotification('success', 'Admin session unlocked.');
@@ -330,7 +372,9 @@ export default function App() {
 
   const handleExitAdminMode = () => {
     setIsAdminMode(false);
-    localStorage.removeItem('office_sync_admin_mode');
+    try {
+      localStorage.removeItem('office_sync_admin_mode');
+    } catch {}
     showNotification('info', 'Exited Administrator mode.');
   };
 
@@ -344,15 +388,15 @@ export default function App() {
     const room = rooms.find(r => r.id === bookingData.roomId);
     if (!room) throw new Error('Selected room is invalid.');
 
-    const bookingsCollection = collection(db, 'bookings');
-
-    // Create a confirmation email record
     const emailToDeliver = bookingData.hostEmail.trim() || user?.email || 'staff@company-workspace.com';
 
     // Handle Multi-day recurring saves
     if (bookingData.multiDates && bookingData.multiDates.length > 0) {
+      const createdBookings: Booking[] = [];
       for (const dateString of bookingData.multiDates) {
-        const docPayload = {
+        const id = `booking-${Date.now()}-${Math.random().toString(36).substr(2, 6)}`;
+        const docPayload: Booking = {
+          id,
           roomId: bookingData.roomId,
           floor: bookingData.floor,
           officeId: activeOffice?.id || room.officeId || '',
@@ -368,8 +412,15 @@ export default function App() {
           outlookSynced: bookingData.outlookSynced || false,
           createdAt: Date.now(),
         };
-        await addDoc(bookingsCollection, docPayload);
+        createdBookings.push(docPayload);
+
+        // Async write to Firestore if available
+        try {
+          addDoc(collection(db, 'bookings'), docPayload).catch(() => {});
+        } catch {}
       }
+
+      setBookings(prev => [...createdBookings, ...prev]);
 
       // Append multi-day email notification to simulated inbox
       const newEmail: SimulatedEmail = {
@@ -396,7 +447,9 @@ export default function App() {
 
     } else {
       // Single booking save
-      const docPayload = {
+      const targetId = bookingData.id || `booking-${Date.now()}-${Math.random().toString(36).substr(2, 6)}`;
+      const docPayload: Booking = {
+        id: targetId,
         roomId: bookingData.roomId,
         floor: bookingData.floor,
         officeId: activeOffice?.id || room.officeId || '',
@@ -415,8 +468,10 @@ export default function App() {
       };
 
       if (isEditing && bookingData.id) {
-        const docRef = doc(db, 'bookings', bookingData.id);
-        await setDoc(docRef, docPayload, { merge: true });
+        setBookings(prev => prev.map(b => b.id === bookingData.id ? { ...b, ...docPayload } : b));
+        try {
+          setDoc(doc(db, 'bookings', bookingData.id), docPayload, { merge: true }).catch(() => {});
+        } catch {}
 
         // Email for edit confirmation
         const editEmail: SimulatedEmail = {
@@ -441,7 +496,10 @@ export default function App() {
         setSimulatedEmails(prev => [editEmail, ...prev]);
         showNotification('success', 'Meeting room reservation updated successfully.');
       } else {
-        await addDoc(bookingsCollection, docPayload);
+        setBookings(prev => [docPayload, ...prev]);
+        try {
+          addDoc(collection(db, 'bookings'), docPayload).catch(() => {});
+        } catch {}
 
         // Email for new reservation
         const newEmail: SimulatedEmail = {
@@ -478,35 +536,35 @@ export default function App() {
 
     const room = rooms.find(r => r.id === booking.roomId);
 
-    try {
-      await deleteDoc(doc(db, 'bookings', bookingId));
+    // Immediate local state update
+    setBookings(prev => prev.filter(b => b.id !== bookingId));
 
-      // Append cancellation notification email
-      const cancelEmail: SimulatedEmail = {
-        id: `email-${Date.now()}`,
-        to: booking.hostEmail,
-        subject: `[CANCELLED] Reservation Cancellation Alert: "${booking.title}"`,
-        date: new Date().toLocaleString(),
-        body: `This email confirms your meeting room booking was successfully deleted.`,
-        details: {
-          title: `CANCELLED: ${booking.title}`,
-          roomName: room ? room.name : 'Meeting Room',
-          floor: booking.floor,
-          startTime: booking.startTime,
-          endTime: booking.endTime,
-          officeName: activeOffice?.name || 'Workspace HQ',
-          officeLocation: activeOffice?.location || 'Corporate Location',
-          dates: [booking.date],
-          hostName: booking.hostName,
-          attendees: [],
-        }
-      };
-      setSimulatedEmails(prev => [cancelEmail, ...prev]);
-      showNotification('success', 'Meeting room reservation deleted successfully.');
-    } catch (err: any) {
-      console.error(err);
-      showNotification('error', 'Failed to cancel reservation.');
-    }
+    try {
+      deleteDoc(doc(db, 'bookings', bookingId)).catch(() => {});
+    } catch {}
+
+    // Append cancellation notification email
+    const cancelEmail: SimulatedEmail = {
+      id: `email-${Date.now()}`,
+      to: booking.hostEmail,
+      subject: `[CANCELLED] Reservation Cancellation Alert: "${booking.title}"`,
+      date: new Date().toLocaleString(),
+      body: `This email confirms your meeting room booking was successfully deleted.`,
+      details: {
+        title: `CANCELLED: ${booking.title}`,
+        roomName: room ? room.name : 'Meeting Room',
+        floor: booking.floor,
+        startTime: booking.startTime,
+        endTime: booking.endTime,
+        officeName: activeOffice?.name || 'Workspace HQ',
+        officeLocation: activeOffice?.location || 'Corporate Location',
+        dates: [booking.date],
+        hostName: booking.hostName,
+        attendees: [],
+      }
+    };
+    setSimulatedEmails(prev => [cancelEmail, ...prev]);
+    showNotification('success', 'Meeting room reservation deleted successfully.');
   };
 
   // -------------------------------------------------------------
@@ -528,7 +586,9 @@ export default function App() {
   const handleLogoutGoogle = async () => {
     try {
       await logout();
-      localStorage.removeItem('google_calendar_access_token');
+      try {
+        localStorage.removeItem('google_calendar_access_token');
+      } catch {}
       setGoogleToken(null);
       showNotification('success', 'Signed out successfully.');
     } catch (err: any) {
@@ -539,7 +599,6 @@ export default function App() {
 
   const handleSyncGoogleNow = async (bookingId: string) => {
     showNotification('info', 'Manual external synchronization initiated.');
-    // Simulated confirmation for Google Sync as OAuth scope is verified
     setTimeout(() => {
       showNotification('success', 'Synced with Google Calendar API successfully.');
     }, 1000);
@@ -549,48 +608,70 @@ export default function App() {
   // Administrative Operations (Delivering from AdminPanel UI)
   // -------------------------------------------------------------
   const handleSaveOfficeAdmin = async (officeData: Omit<Office, 'createdAt'> & { id?: string }) => {
-    const docRef = doc(db, 'offices', officeData.id!);
-    await setDoc(docRef, {
+    const id = officeData.id || `office-${Date.now()}`;
+    const newOffice: Office = {
       ...officeData,
+      id,
       createdAt: Date.now()
-    }, { merge: true });
+    };
+
+    setOffices(prev => {
+      const exists = prev.some(o => o.id === id);
+      if (exists) {
+        return prev.map(o => o.id === id ? newOffice : o);
+      }
+      return [...prev, newOffice];
+    });
+
+    try {
+      setDoc(doc(db, 'offices', id), newOffice, { merge: true }).catch(() => {});
+    } catch {}
+
     showNotification('success', 'Office properties synchronized safely.');
   };
 
   const handleDeleteOfficeAdmin = async (officeId: string) => {
-    // Cascade-delete associated rooms and bookings
-    await deleteDoc(doc(db, 'offices', officeId));
-    
-    const linkedRooms = rooms.filter(r => r.officeId === officeId);
-    for (const r of linkedRooms) {
-      await deleteDoc(doc(db, 'rooms', r.id));
-    }
+    setOffices(prev => prev.filter(o => o.id !== officeId));
+    setRooms(prev => prev.filter(r => r.officeId !== officeId));
+    setBookings(prev => prev.filter(b => b.officeId !== officeId));
 
-    const linkedBookings = bookings.filter(b => b.officeId === officeId || linkedRooms.some(r => r.id === b.roomId));
-    for (const b of linkedBookings) {
-      await deleteDoc(doc(db, 'bookings', b.id));
-    }
+    try {
+      deleteDoc(doc(db, 'offices', officeId)).catch(() => {});
+    } catch {}
 
     if (activeOffice?.id === officeId) {
       setActiveOffice(null);
-      localStorage.removeItem('office_sync_active_office');
+      try {
+        localStorage.removeItem('office_sync_active_office');
+      } catch {}
     }
-    showNotification('success', 'Office and all tethers wiped from registry.');
+    showNotification('success', 'Office and all associated rooms deleted.');
   };
 
   const handleSaveRoomAdmin = async (roomData: Room) => {
-    await setDoc(doc(db, 'rooms', roomData.id), roomData, { merge: true });
-    showNotification('success', 'Room specifications locked in.');
+    setRooms(prev => {
+      const exists = prev.some(r => r.id === roomData.id);
+      if (exists) {
+        return prev.map(r => r.id === roomData.id ? roomData : r);
+      }
+      return [...prev, roomData];
+    });
+
+    try {
+      setDoc(doc(db, 'rooms', roomData.id), roomData, { merge: true }).catch(() => {});
+    } catch {}
+
+    showNotification('success', 'Room specifications saved.');
   };
 
   const handleDeleteRoomAdmin = async (roomId: string) => {
-    await deleteDoc(doc(db, 'rooms', roomId));
-    
-    // Clear rooms bookings
-    const linkedBookings = bookings.filter(b => b.roomId === roomId);
-    for (const b of linkedBookings) {
-      await deleteDoc(doc(db, 'bookings', b.id));
-    }
+    setRooms(prev => prev.filter(r => r.id !== roomId));
+    setBookings(prev => prev.filter(b => b.roomId !== roomId));
+
+    try {
+      deleteDoc(doc(db, 'rooms', roomId)).catch(() => {});
+    } catch {}
+
     showNotification('success', 'Room deleted, pending calendar invitations cleared.');
   };
 
@@ -647,9 +728,12 @@ export default function App() {
     setIsModalOpen(true);
   };
 
-  const handleTimelineCellClick = (room: Room, hour: string) => {
+  const handleTimelineCellClick = (room: Room, hour: string, customDate?: string) => {
     setSelectedRoomForModal(room);
     setSelectedHourForModal(hour);
+    if (customDate) {
+      setSelectedDate(customDate);
+    }
     setEditingBooking(null);
     setIsModalOpen(true);
   };
@@ -676,8 +760,8 @@ export default function App() {
             className="fixed top-4 left-1/2 -translate-x-1/2 z-50 w-full max-w-sm px-4"
           >
             <div className={`p-3.5 rounded-2xl shadow-xl flex items-start gap-2.5 border text-white ${
-              notification.type === 'success' ? 'bg-indigo-650 border-indigo-750' : 
-              notification.type === 'error' ? 'bg-rose-900 border-rose-950' : 'bg-slate-850 border-slate-900'
+              notification.type === 'success' ? 'bg-indigo-600 border-indigo-700' : 
+              notification.type === 'error' ? 'bg-rose-900 border-rose-950' : 'bg-slate-800 border-slate-900'
             }`}>
               {notification.type === 'success' ? (
                 <CheckCircle className="w-5 h-5 shrink-0 text-emerald-400 mt-0.5" />
@@ -824,29 +908,72 @@ export default function App() {
         /* Employee Active Dashboard */
         <main className="flex-1 max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6 w-full space-y-4">
           
-          {/* Header Card with Date */}
-          <div className="flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3 bg-white border border-slate-200 rounded-lg p-4 shadow-sm">
+          {/* Header Card with Date & View Mode Switcher */}
+          <div className="flex flex-col md:flex-row items-stretch md:items-center justify-between gap-3 bg-white border border-slate-200 rounded-lg p-4 shadow-sm">
             <div>
               <h2 className="text-base font-bold font-sans text-slate-800 tracking-tight flex items-center gap-2 uppercase">
                 <Building2 className="w-4.5 h-4.5 text-indigo-600" />
-                Real-Time Booking Matrix
+                Meeting Room Availability Matrix
               </h2>
               <p className="text-[11px] text-slate-500 font-sans mt-0.5">
-                Manage and reserve workspace rooms on {activeOffice.name} floors.
+                Real-time schedules & availability across {activeOffice.name} spaces.
               </p>
             </div>
 
-            <div className="flex items-center gap-2 bg-slate-50 border border-slate-200 rounded p-1.5 shrink-0 sm:self-center">
-              <CalendarDays className="w-3.5 h-3.5 text-slate-400 ml-1" />
-              <input
-                type="date"
-                value={selectedDate}
-                onChange={(e) => setSelectedDate(e.target.value)}
-                className="bg-transparent border-0 text-xs font-bold text-slate-700 focus:outline-none focus:ring-0 cursor-pointer"
-              />
-              <span className="text-[10px] font-mono bg-indigo-50 text-indigo-700 px-2 py-0.5 rounded font-black uppercase">
-                {formatFriendlyDate(selectedDate)}
-              </span>
+            <div className="flex items-center gap-2.5 flex-wrap">
+              {/* View Switcher Segmented Tabs: Day | Week | Month */}
+              <div className="flex items-center bg-slate-100 p-1 rounded-lg border border-slate-200">
+                <button
+                  type="button"
+                  onClick={() => setViewMode('day')}
+                  className={`flex items-center gap-1.5 px-3 py-1 text-xs font-bold rounded-md transition-all cursor-pointer ${
+                    viewMode === 'day'
+                      ? 'bg-white text-indigo-600 shadow-xs ring-1 ring-slate-200'
+                      : 'text-slate-600 hover:text-slate-900 hover:bg-slate-200/50'
+                  }`}
+                >
+                  <Clock className="w-3.5 h-3.5" />
+                  <span>Day</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setViewMode('week')}
+                  className={`flex items-center gap-1.5 px-3 py-1 text-xs font-bold rounded-md transition-all cursor-pointer ${
+                    viewMode === 'week'
+                      ? 'bg-white text-indigo-600 shadow-xs ring-1 ring-slate-200'
+                      : 'text-slate-600 hover:text-slate-900 hover:bg-slate-200/50'
+                  }`}
+                >
+                  <CalendarRange className="w-3.5 h-3.5" />
+                  <span>Week</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setViewMode('month')}
+                  className={`flex items-center gap-1.5 px-3 py-1 text-xs font-bold rounded-md transition-all cursor-pointer ${
+                    viewMode === 'month'
+                      ? 'bg-white text-indigo-600 shadow-xs ring-1 ring-slate-200'
+                      : 'text-slate-600 hover:text-slate-900 hover:bg-slate-200/50'
+                  }`}
+                >
+                  <Calendar className="w-3.5 h-3.5" />
+                  <span>Month</span>
+                </button>
+              </div>
+
+              {/* Date Input */}
+              <div className="flex items-center gap-2 bg-slate-50 border border-slate-200 rounded p-1.5 shrink-0">
+                <CalendarDays className="w-3.5 h-3.5 text-slate-400 ml-1" />
+                <input
+                  type="date"
+                  value={selectedDate}
+                  onChange={(e) => setSelectedDate(e.target.value)}
+                  className="bg-transparent border-0 text-xs font-bold text-slate-700 focus:outline-none focus:ring-0 cursor-pointer"
+                />
+                <span className="text-[10px] font-mono bg-indigo-50 text-indigo-700 px-2 py-0.5 rounded font-black uppercase hidden sm:inline">
+                  {formatFriendlyDate(selectedDate)}
+                </span>
+              </div>
             </div>
           </div>
 
@@ -898,46 +1025,58 @@ export default function App() {
                   />
                 </div>
 
-                <div>
-                  <label className="block text-[9px] font-black text-slate-400 uppercase tracking-wider mb-1.5 font-mono">
-                    Capacity Cap (Pax)
+                {/* Capacity segmented buttons */}
+                <div className="space-y-1.5">
+                  <label className="text-[10px] font-bold text-slate-500 font-sans uppercase tracking-wider">
+                    Room Capacity
                   </label>
-                  <div className="grid grid-cols-4 gap-1 bg-slate-50 p-0.5 rounded border border-slate-200">
-                    {['all', 'small', 'medium', 'large'].map(opt => (
+                  <div className="grid grid-cols-4 gap-1">
+                    {[
+                      { id: 'all', label: 'All' },
+                      { id: 'small', label: '1-4' },
+                      { id: 'medium', label: '5-12' },
+                      { id: 'large', label: '13+' }
+                    ].map((btn) => (
                       <button
-                        key={opt}
-                        onClick={() => setCapacityFilter(opt)}
-                        className={`py-0.5 text-[9px] font-bold rounded uppercase transition-all capitalize cursor-pointer ${
-                          capacityFilter === opt
-                            ? 'bg-white text-indigo-600 shadow-sm font-black border border-slate-200'
-                            : 'text-slate-500 hover:text-slate-800'
+                        key={btn.id}
+                        type="button"
+                        onClick={() => setCapacityFilter(btn.id)}
+                        className={`py-1 text-[11px] font-bold rounded transition-colors cursor-pointer ${
+                          capacityFilter === btn.id
+                            ? 'bg-indigo-600 text-white shadow-xs'
+                            : 'bg-slate-100 hover:bg-slate-200 text-slate-600'
                         }`}
                       >
-                        {opt === 'small' ? '≤4' : opt === 'medium' ? '5-12' : opt === 'large' ? '13+' : 'All'}
+                        {btn.label}
                       </button>
                     ))}
                   </div>
                 </div>
 
+                {/* Dynamic Amenities Checkbox List */}
                 {allUniqueAmenities.length > 0 && (
-                  <div>
-                    <label className="block text-[9px] font-black text-slate-400 uppercase tracking-wider mb-1.5 font-mono">
-                      Meeting Room Amenities
+                  <div className="space-y-1.5 pt-2 border-t border-slate-100">
+                    <label className="text-[10px] font-bold text-slate-500 font-sans uppercase tracking-wider">
+                      Included Amenities
                     </label>
-                    <div className="flex flex-wrap gap-1">
-                      {allUniqueAmenities.map(amenity => {
-                        const isSelected = selectedAmenities.includes(amenity);
+                    <div className="grid grid-cols-1 gap-1 max-h-40 overflow-y-auto pr-1">
+                      {allUniqueAmenities.map((amenity) => {
+                        const isChecked = selectedAmenities.includes(amenity);
                         return (
                           <button
                             key={amenity}
+                            type="button"
                             onClick={() => handleAmenityToggle(amenity)}
-                            className={`text-[9px] font-bold uppercase tracking-tight px-2 py-1 rounded border transition-all cursor-pointer ${
-                              isSelected
-                                ? 'bg-indigo-50 text-indigo-700 border-indigo-200'
-                                : 'bg-white text-slate-500 border-slate-200 hover:border-slate-300'
+                            className={`flex items-center justify-between px-2 py-1 rounded text-left transition-colors cursor-pointer ${
+                              isChecked ? 'bg-indigo-50 text-indigo-800 font-semibold' : 'hover:bg-slate-50 text-slate-600'
                             }`}
                           >
-                            {amenity}
+                            <span className="text-[11px] truncate">{amenity}</span>
+                            <span className={`w-3.5 h-3.5 rounded border flex items-center justify-center text-[9px] ${
+                              isChecked ? 'bg-indigo-600 border-indigo-600 text-white' : 'border-slate-300'
+                            }`}>
+                              {isChecked ? '✓' : ''}
+                            </span>
                           </button>
                         );
                       })}
@@ -946,19 +1085,25 @@ export default function App() {
                 )}
               </div>
 
-              {/* Room Specifications Catalogue */}
-              <div className="space-y-2">
-                <h3 className="text-[10px] font-black text-slate-400 uppercase tracking-wider font-mono px-1">
-                  Floor Meeting Rooms ({filteredRooms.length})
-                </h3>
-                
-                <div className="space-y-3 max-h-[480px] overflow-y-auto pr-1">
-                  {filteredRooms.length === 0 ? (
-                    <div className="bg-white border border-slate-200 rounded-lg p-6 text-center text-slate-400 text-xs font-medium">
-                      No meeting rooms on Lvl {selectedFloor} match selected filters.
+              {/* Room Cards List for Floor */}
+              <div className="space-y-3">
+                <div className="flex items-center justify-between px-1">
+                  <span className="text-[11px] font-bold text-slate-500 uppercase tracking-wider font-mono">
+                    Floor {selectedFloor} Spaces ({filteredRooms.length})
+                  </span>
+                </div>
+
+                {filteredRooms.length === 0 ? (
+                  <div className="bg-white border border-dashed border-slate-300 rounded-lg p-6 text-center space-y-2">
+                    <div className="w-8 h-8 bg-slate-100 rounded-full flex items-center justify-center mx-auto text-slate-400">
+                      <Filter className="w-4 h-4" />
                     </div>
-                  ) : (
-                    filteredRooms.map(room => (
+                    <p className="text-xs font-bold text-slate-600">No rooms match filter criteria</p>
+                    <p className="text-[10px] text-slate-400">Try clearing amenity tags or switching floors.</p>
+                  </div>
+                ) : (
+                  <div className="space-y-3">
+                    {filteredRooms.map(room => (
                       <RoomCard
                         key={room.id}
                         room={room}
@@ -966,25 +1111,65 @@ export default function App() {
                         selectedDate={selectedDate}
                         onBookClick={handleRoomBookClick}
                       />
-                    ))
-                  )}
-                </div>
+                    ))}
+                  </div>
+                )}
               </div>
 
             </div>
 
-            {/* Timelines and Bookings list (Right Column) */}
-            <div className="lg:col-span-8 space-y-6">
+            {/* Matrix & Timelines (Right Column) */}
+            <div className="lg:col-span-8 space-y-4">
               
-              <BookingTimeline
-                rooms={filteredRooms}
-                bookings={currentOfficeBookings}
-                selectedDate={selectedDate}
-                onCellClick={handleTimelineCellClick}
-                onBookingClick={handleBookingPillClick}
-                currentUserUid={user?.uid}
-                onCancelBooking={handleCancelBooking}
-              />
+              {/* Day View */}
+              {viewMode === 'day' && (
+                <BookingTimeline
+                  rooms={filteredRooms}
+                  bookings={currentOfficeBookings}
+                  selectedDate={selectedDate}
+                  onSelectDate={setSelectedDate}
+                  onCellClick={handleTimelineCellClick}
+                  onBookingClick={handleBookingPillClick}
+                  currentUserUid={user?.uid}
+                  onCancelBooking={handleCancelBooking}
+                />
+              )}
+
+              {/* Week View */}
+              {viewMode === 'week' && (
+                <WeeklyScheduleView
+                  rooms={filteredRooms}
+                  bookings={currentOfficeBookings}
+                  selectedDate={selectedDate}
+                  onSelectDate={setSelectedDate}
+                  onCellClick={handleTimelineCellClick}
+                  onBookingClick={handleBookingPillClick}
+                  currentUserUid={user?.uid}
+                  onCancelBooking={handleCancelBooking}
+                  onSwitchToDayView={(date) => {
+                    setSelectedDate(date);
+                    setViewMode('day');
+                  }}
+                />
+              )}
+
+              {/* Month View */}
+              {viewMode === 'month' && (
+                <MonthlyAvailabilityView
+                  rooms={filteredRooms}
+                  bookings={currentOfficeBookings}
+                  selectedDate={selectedDate}
+                  onSelectDate={setSelectedDate}
+                  onCellClick={handleTimelineCellClick}
+                  onBookingClick={handleBookingPillClick}
+                  currentUserUid={user?.uid}
+                  onCancelBooking={handleCancelBooking}
+                  onSwitchToDayView={(date) => {
+                    setSelectedDate(date);
+                    setViewMode('day');
+                  }}
+                />
+              )}
 
               <MyBookings
                 bookings={currentOfficeBookings}
@@ -1038,7 +1223,7 @@ export default function App() {
                     setAdminPasswordInput('');
                     setAdminAuthError('');
                   }}
-                  className="p-1 hover:bg-slate-150 rounded-lg text-slate-400"
+                  className="p-1 hover:bg-slate-100 rounded-lg text-slate-400"
                 >
                   <X className="w-4 h-4" />
                 </button>

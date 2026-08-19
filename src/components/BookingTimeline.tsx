@@ -1,13 +1,14 @@
 import React from 'react';
-import { Clock, Plus, Users, ShieldAlert, Monitor, Video, Pencil, Trash } from 'lucide-react';
+import { Clock, Plus, Users, ShieldAlert, Monitor, Video, Pencil, Trash, ChevronLeft, ChevronRight } from 'lucide-react';
 import { Room, Booking } from '../types';
-import { timeToMinutes, getBookingStatus } from '../utils';
+import { timeToMinutes, getBookingStatus, addDaysToDate, formatDateToISO, formatFriendlyDate } from '../utils';
 
 interface BookingTimelineProps {
   rooms: Room[];
   bookings: Booking[];
   selectedDate: string;
-  onCellClick: (room: Room, hour: string) => void;
+  onSelectDate?: (date: string) => void;
+  onCellClick: (room: Room, hour: string, date?: string) => void;
   onBookingClick: (booking: Booking) => void;
   currentUserUid?: string;
   onCancelBooking?: (bookingId: string) => void;
@@ -17,6 +18,7 @@ export const BookingTimeline: React.FC<BookingTimelineProps> = ({
   rooms,
   bookings,
   selectedDate,
+  onSelectDate,
   onCellClick,
   onBookingClick,
   currentUserUid,
@@ -27,6 +29,18 @@ export const BookingTimeline: React.FC<BookingTimelineProps> = ({
   const totalHours = endHour - startHour;
   const startMinutes = startHour * 60; // 480
   const totalMinutes = totalHours * 60; // 660
+
+  const handlePrevDay = () => {
+    if (onSelectDate) onSelectDate(addDaysToDate(selectedDate, -1));
+  };
+
+  const handleNextDay = () => {
+    if (onSelectDate) onSelectDate(addDaysToDate(selectedDate, 1));
+  };
+
+  const handleToday = () => {
+    if (onSelectDate) onSelectDate(formatDateToISO(new Date()));
+  };
 
   // Generate hourly labels for header
   const hoursArray = Array.from({ length: totalHours }, (_, i) => {
@@ -54,15 +68,43 @@ export const BookingTimeline: React.FC<BookingTimelineProps> = ({
       
       {/* Header */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 mb-4">
-        <div className="flex items-center gap-2">
-          <Clock className="w-4 h-4 text-indigo-600" />
-          <h2 className="font-sans font-bold text-slate-800 tracking-tight text-xs uppercase">
-            Daily Timeline Matrix
-          </h2>
-          <span className="text-[10px] bg-indigo-50 text-indigo-700 border border-indigo-100 font-mono px-2 py-0.5 rounded-sm font-bold">
-            08:00 AM - 07:00 PM
-          </span>
+        <div className="flex items-center gap-2 flex-wrap">
+          {onSelectDate && (
+            <div className="flex items-center bg-slate-100 border border-slate-200 rounded-md p-0.5 mr-1">
+              <button
+                onClick={handlePrevDay}
+                className="p-1 hover:bg-white text-slate-600 hover:text-indigo-600 rounded transition-colors"
+                title="Previous Day"
+              >
+                <ChevronLeft className="w-3.5 h-3.5" />
+              </button>
+              <button
+                onClick={handleToday}
+                className="px-2 py-0.5 text-[10px] font-bold text-slate-700 hover:bg-white rounded transition-colors"
+              >
+                Today
+              </button>
+              <button
+                onClick={handleNextDay}
+                className="p-1 hover:bg-white text-slate-600 hover:text-indigo-600 rounded transition-colors"
+                title="Next Day"
+              >
+                <ChevronRight className="w-3.5 h-3.5" />
+              </button>
+            </div>
+          )}
+
+          <div className="flex items-center gap-2">
+            <Clock className="w-4 h-4 text-indigo-600" />
+            <h2 className="font-sans font-bold text-slate-800 tracking-tight text-xs uppercase">
+              Daily Timeline Matrix
+            </h2>
+            <span className="text-[10px] bg-indigo-50 text-indigo-700 border border-indigo-100 font-mono px-2 py-0.5 rounded-sm font-bold">
+              {formatFriendlyDate(selectedDate)}
+            </span>
+          </div>
         </div>
+
         <div className="flex items-center gap-3 text-[10px] font-bold uppercase tracking-wider text-slate-400 font-mono">
           <div className="flex items-center gap-1">
             <span className="w-2.5 h-2.5 rounded-sm bg-indigo-600 inline-block" />
@@ -78,6 +120,7 @@ export const BookingTimeline: React.FC<BookingTimelineProps> = ({
           </div>
         </div>
       </div>
+
 
       {/* Grid Container with horizontal scroll */}
       <div className="overflow-x-auto border border-slate-200 rounded">
