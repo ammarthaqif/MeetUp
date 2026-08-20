@@ -141,92 +141,102 @@ export const TenantSwitcherModal: React.FC<TenantSwitcherModalProps> = ({
             )}
           </div>
 
-          {/* Tenant Directory (Direct Selection for Authorized / Super Admin) */}
-          <div className="space-y-3">
-            <div className="flex items-center justify-between">
-              <div className="flex items-center gap-2 text-xs font-bold uppercase tracking-wider text-slate-400">
-                <Layers className="w-3.5 h-3.5 text-indigo-400" />
-                Available Corporate Tenants ({tenants.length})
+          {/* Tenant Directory (Direct Selection for Authorized Super Admin Only) */}
+          {isMasterAdmin ? (
+            <div className="space-y-3">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-2 text-xs font-bold uppercase tracking-wider text-slate-400">
+                  <Layers className="w-3.5 h-3.5 text-indigo-400" />
+                  Super Admin Tenant Directory ({tenants.length})
+                </div>
+                <div className="relative w-48">
+                  <Search className="w-3.5 h-3.5 text-slate-500 absolute left-2.5 top-1/2 -translate-y-1/2 pointer-events-none" />
+                  <input
+                    type="text"
+                    value={searchTerm}
+                    onChange={(e) => setSearchTerm(e.target.value)}
+                    placeholder="Filter companies..."
+                    className="w-full bg-slate-950 border border-slate-800 rounded-lg pl-8 pr-2 py-1 text-[11px] text-slate-200 placeholder-slate-500 focus:outline-none focus:border-indigo-500"
+                  />
+                </div>
               </div>
-              <div className="relative w-48">
-                <Search className="w-3.5 h-3.5 text-slate-500 absolute left-2.5 top-1/2 -translate-y-1/2 pointer-events-none" />
-                <input
-                  type="text"
-                  value={searchTerm}
-                  onChange={(e) => setSearchTerm(e.target.value)}
-                  placeholder="Filter companies..."
-                  className="w-full bg-slate-950 border border-slate-800 rounded-lg pl-8 pr-2 py-1 text-[11px] text-slate-200 placeholder-slate-500 focus:outline-none focus:border-indigo-500"
-                />
-              </div>
-            </div>
 
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-              {filteredTenants.map((t) => {
-                const isSelected = currentTenant?.id === t.id;
-                const tenantKey = accessKeys.find(k => k.tenantId === t.id && k.active);
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                {filteredTenants.map((t) => {
+                  const isSelected = currentTenant?.id === t.id;
+                  const tenantKey = accessKeys.find(k => k.tenantId === t.id && k.active);
 
-                return (
-                  <div
-                    key={t.id}
-                    className={`p-4 rounded-2xl border transition-all flex flex-col justify-between space-y-3 ${
-                      isSelected 
-                        ? 'bg-indigo-950/40 border-indigo-500/60 ring-1 ring-indigo-500/30' 
-                        : 'bg-slate-950/70 border-slate-800/80 hover:border-slate-700'
-                    }`}
-                  >
-                    <div className="flex items-start justify-between gap-2">
-                      <div className="flex items-center gap-3">
-                        <div className={`w-9 h-9 rounded-xl flex items-center justify-center font-bold text-xs ${
-                          t.themeColor === 'emerald' ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/30' :
-                          t.themeColor === 'violet' ? 'bg-violet-500/20 text-violet-300 border border-violet-500/30' :
-                          t.themeColor === 'cyan' ? 'bg-cyan-500/20 text-cyan-300 border border-cyan-500/30' :
-                          'bg-indigo-500/20 text-indigo-300 border border-indigo-500/30'
-                        }`}>
-                          {t.logoBadge}
-                        </div>
-                        <div>
-                          <div className="text-xs font-bold text-white flex items-center gap-1.5">
-                            {t.name}
-                            {isSelected && (
-                              <span className="text-[10px] px-1.5 py-0.2 rounded bg-indigo-500/20 text-indigo-300 font-semibold">
-                                Active
-                              </span>
-                            )}
+                  return (
+                    <div
+                      key={t.id}
+                      className={`p-4 rounded-2xl border transition-all flex flex-col justify-between space-y-3 ${
+                        isSelected 
+                          ? 'bg-indigo-950/40 border-indigo-500/60 ring-1 ring-indigo-500/30' 
+                          : 'bg-slate-950/70 border-slate-800/80 hover:border-slate-700'
+                      }`}
+                    >
+                      <div className="flex items-start justify-between gap-2">
+                        <div className="flex items-center gap-3">
+                          <div className={`w-9 h-9 rounded-xl flex items-center justify-center font-bold text-xs ${
+                            t.themeColor === 'emerald' ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/30' :
+                            t.themeColor === 'violet' ? 'bg-violet-500/20 text-violet-300 border border-violet-500/30' :
+                            t.themeColor === 'cyan' ? 'bg-cyan-500/20 text-cyan-300 border border-cyan-500/30' :
+                            'bg-indigo-500/20 text-indigo-300 border border-indigo-500/30'
+                          }`}>
+                            {t.logoBadge}
                           </div>
-                          <div className="text-[10px] text-slate-400">{t.domain || t.code} &bull; {t.planTier}</div>
+                          <div>
+                            <div className="text-xs font-bold text-white flex items-center gap-1.5">
+                              {t.name}
+                              {isSelected && (
+                                <span className="text-[10px] px-1.5 py-0.2 rounded bg-indigo-500/20 text-indigo-300 font-semibold">
+                                  Active
+                                </span>
+                              )}
+                            </div>
+                            <div className="text-[10px] text-slate-400">{t.domain || t.code} &bull; {t.planTier}</div>
+                          </div>
                         </div>
                       </div>
+
+                      <p className="text-[11px] text-slate-400 line-clamp-2">
+                        {t.description}
+                      </p>
+
+                      <div className="pt-2 border-t border-slate-800/60 flex items-center justify-between">
+                        <span className="text-[10px] font-mono text-slate-500">
+                          {tenantKey ? `Key: ${tenantKey.token}` : 'Token Required'}
+                        </span>
+
+                        <button
+                          onClick={() => {
+                            onSwitchTenant(t, tenantKey?.token);
+                            onClose();
+                          }}
+                          disabled={isSelected}
+                          className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all cursor-pointer flex items-center gap-1 ${
+                            isSelected
+                              ? 'bg-slate-800 text-slate-500 cursor-not-allowed'
+                              : 'bg-indigo-600 hover:bg-indigo-500 text-white shadow-sm'
+                          }`}
+                        >
+                          {isSelected ? 'Current Workspace' : 'Select'}
+                        </button>
+                      </div>
                     </div>
-
-                    <p className="text-[11px] text-slate-400 line-clamp-2">
-                      {t.description}
-                    </p>
-
-                    <div className="pt-2 border-t border-slate-800/60 flex items-center justify-between">
-                      <span className="text-[10px] font-mono text-slate-500">
-                        {tenantKey ? `Key: ${tenantKey.token}` : 'Token Required'}
-                      </span>
-
-                      <button
-                        onClick={() => {
-                          onSwitchTenant(t, tenantKey?.token);
-                          onClose();
-                        }}
-                        disabled={isSelected}
-                        className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all cursor-pointer flex items-center gap-1 ${
-                          isSelected
-                            ? 'bg-slate-800 text-slate-500 cursor-not-allowed'
-                            : 'bg-indigo-600 hover:bg-indigo-500 text-white shadow-sm'
-                        }`}
-                      >
-                        {isSelected ? 'Current Workspace' : 'Select'}
-                      </button>
-                    </div>
-                  </div>
-                );
-              })}
+                  );
+                })}
+              </div>
             </div>
-          </div>
+          ) : (
+            <div className="p-4 rounded-2xl bg-slate-950/60 border border-slate-800 text-center space-y-2">
+              <Lock className="w-5 h-5 text-slate-500 mx-auto" />
+              <div className="text-xs font-bold text-slate-300">Confidential Tenant Directory</div>
+              <p className="text-[11px] text-slate-400 max-w-sm mx-auto">
+                Other client organization portals and access tokens are kept strictly confidential. To switch to another organization, enter its private access token above.
+              </p>
+            </div>
+          )}
 
         </div>
 

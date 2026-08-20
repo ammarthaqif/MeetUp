@@ -1,5 +1,6 @@
-export type TenantPlan = 'Enterprise' | 'Business Pro' | 'Standard';
+export type TenantPlan = 'Enterprise' | 'Business Pro' | 'Standard' | 'Custom VIP';
 export type TenantRole = 'company_admin' | 'staff' | 'guest';
+export type SubscriptionStatus = 'active' | 'trial' | 'past_due' | 'cancelled' | 'Paid Active' | 'Annual Enterprise' | 'Monthly Active' | 'VIP Retainer';
 
 export interface Tenant {
   id: string;
@@ -15,6 +16,14 @@ export interface Tenant {
   planTier: TenantPlan;
   createdAt: number;
   active: boolean;
+  // Enhanced subscription & admin provisioning details
+  subscriptionStatus?: SubscriptionStatus;
+  subscriptionAmount?: string; // e.g. "$499/mo", "$4,990/yr"
+  billingReference?: string; // e.g. "INV-2026-0881" or "STRIPE-SUB-4910"
+  renewalDate?: string; // e.g. "2027-08-20"
+  assignedAdminName?: string;
+  assignedAdminEmail?: string;
+  assignedAdminDepartment?: string;
 }
 
 export interface Office {

@@ -38,7 +38,7 @@ export const Navbar: React.FC<NavbarProps> = ({
   onOpenAdminAuth,
   onExitAdminMode,
   onOpenRoomFinder,
-  adminEmail = 'ammarthaqif.ar@gmail.com',
+  adminEmail = 'admin@enterprise.internal',
 }) => {
   const hasAdminRights = isMasterAdmin || isFocalAdmin;
 

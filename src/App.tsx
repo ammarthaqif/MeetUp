@@ -245,7 +245,8 @@ export default function App() {
   };
 
   // Master Admin & Company Focal Admin permissions
-  const isMasterAdmin = (tenantAccessToken === 'MASTER-PLATFORM-ADMIN-2026') || (user?.email?.toLowerCase() === ADMIN_EMAIL.toLowerCase());
+  // Super Admin dashboard is strictly restricted to ammarthaqif.ar@gmail.com
+  const isMasterAdmin = !!user?.email && (user.email.toLowerCase() === ADMIN_EMAIL.toLowerCase());
   
   const isFocalAdmin = !!user?.email && !!activeTenant?.focalAdminEmails && activeTenant.focalAdminEmails.some(
     email => email.trim().toLowerCase() === user.email?.trim().toLowerCase()
@@ -489,7 +490,13 @@ export default function App() {
     showNotification('info', 'Workspace locked. Please provide access token to re-enter.');
   };
 
-  const handleSaveTenant = async (tenantData: Tenant) => {
+  const handleSaveTenant = async (
+    tenantData: Tenant,
+    extraConfig?: {
+      initialOffice?: { name: string; location: string; passkey: string; floors: number[] };
+      adminTokenRole?: 'company_admin';
+    }
+  ) => {
     const isExisting = tenants.some(t => t.id === tenantData.id);
     if (isExisting) {
       setTenants(prev => prev.map(t => t.id === tenantData.id ? tenantData : t));
@@ -506,9 +513,74 @@ export default function App() {
       }
     } catch {}
 
+    // Auto-create initial Office if requested
+    if (extraConfig?.initialOffice) {
+      const officeId = `office-${Date.now()}`;
+      const newOffice: Office = {
+        id: officeId,
+        tenantId: tenantData.id,
+        name: extraConfig.initialOffice.name,
+        location: extraConfig.initialOffice.location,
+        passkey: extraConfig.initialOffice.passkey,
+        floors: extraConfig.initialOffice.floors,
+        createdAt: Date.now()
+      };
+
+      setOffices(prev => [...prev, newOffice]);
+      try {
+        if (db) {
+          setDoc(doc(db, 'offices', officeId), newOffice, { merge: true }).catch(() => {});
+        }
+      } catch {}
+    }
+
+    // Auto-issue Company Admin Access Key & Whitelist for assigned admin
+    if (!isExisting) {
+      const adminToken = `${tenantData.code}-ADMIN-${Math.floor(1000 + Math.random() * 9000)}`;
+      const keyId = `key-${Date.now()}`;
+      const newKey: AccessKey = {
+        id: keyId,
+        tenantId: tenantData.id,
+        token: adminToken,
+        label: `${tenantData.name} Primary Admin Token`,
+        role: 'company_admin',
+        active: true,
+        createdAt: Date.now(),
+        createdBy: user?.email || ADMIN_EMAIL,
+        usedCount: 0
+      };
+
+      setAccessKeys(prev => [newKey, ...prev]);
+      try {
+        if (db) {
+          setDoc(doc(db, 'access_keys', keyId), newKey, { merge: true }).catch(() => {});
+        }
+      } catch {}
+
+      // Whitelist assigned admin email
+      if (tenantData.assignedAdminEmail) {
+        const userId = `usr-${Date.now()}`;
+        const newApproved: ApprovedUser = {
+          id: userId,
+          tenantId: tenantData.id,
+          email: tenantData.assignedAdminEmail.toLowerCase().trim(),
+          name: tenantData.assignedAdminName,
+          department: tenantData.assignedAdminDepartment || 'Admin Operations',
+          addedAt: Date.now(),
+          addedBy: user?.email || ADMIN_EMAIL
+        };
+        setApprovedUsers(prev => [newApproved, ...prev]);
+        try {
+          if (db) {
+            setDoc(doc(db, 'approved_users', userId), newApproved, { merge: true }).catch(() => {});
+          }
+        } catch {}
+      }
+    }
+
     logActivity({
       action: isExisting ? 'TENANT_UPDATED' : 'TENANT_CREATED',
-      details: `${isExisting ? 'Updated' : 'Provisioned new'} tenant organization "${tenantData.name}" (${tenantData.code})`,
+      details: `${isExisting ? 'Updated' : 'Provisioned new'} tenant organization "${tenantData.name}" (${tenantData.code}) with plan ${tenantData.planTier}`,
       tenantId: tenantData.id
     });
 
@@ -979,6 +1051,7 @@ export default function App() {
         const id = `booking-${Date.now()}-${Math.random().toString(36).substr(2, 6)}`;
         const docPayload: Booking = {
           id,
+          tenantId: activeTenant?.id || '',
           roomId: bookingData.roomId,
           floor: bookingData.floor,
           officeId: activeOffice?.id || room.officeId || '',
@@ -1046,6 +1119,7 @@ export default function App() {
       const targetId = bookingData.id || `booking-${Date.now()}-${Math.random().toString(36).substr(2, 6)}`;
       const docPayload: Booking = {
         id: targetId,
+        tenantId: activeTenant?.id || '',
         roomId: bookingData.roomId,
         floor: bookingData.floor,
         officeId: activeOffice?.id || room.officeId || '',

@@ -158,7 +158,7 @@ export const BookingAuthModal: React.FC<BookingAuthModalProps> = ({
           </button>
 
           <p className="text-[9px] text-center text-slate-400 font-mono">
-            Admin administrator: <span className="font-semibold">{adminEmail}</span>
+            Access protected by workspace authorization policy
           </p>
         </div>
 
