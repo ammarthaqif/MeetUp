@@ -1,5 +1,25 @@
+export type TenantPlan = 'Enterprise' | 'Business Pro' | 'Standard';
+export type TenantRole = 'company_admin' | 'staff' | 'guest';
+
+export interface Tenant {
+  id: string;
+  name: string;
+  slug: string; // e.g. "acme", "nexus", "starlight"
+  code: string; // e.g. "ACME", "NEXUS"
+  description: string;
+  domain?: string; // e.g. "acme.com"
+  contactEmail: string;
+  focalAdminEmails?: string[]; // Designated company focal admins assigned by superadmin
+  logoBadge: string; // Icon or initials badge (e.g. "AG", "NC", "SM")
+  themeColor: 'indigo' | 'emerald' | 'violet' | 'cyan' | 'amber' | 'rose' | 'blue';
+  planTier: TenantPlan;
+  createdAt: number;
+  active: boolean;
+}
+
 export interface Office {
   id: string;
+  tenantId?: string; // Associated corporate tenant
   name: string;
   location: string;
   passkey: string;
@@ -9,6 +29,7 @@ export interface Office {
 
 export interface Room {
   id: string;
+  tenantId?: string; // Associated corporate tenant
   name: string;
   floor: number;
   capacity: number;
@@ -20,6 +41,7 @@ export interface Room {
 
 export interface Booking {
   id: string;
+  tenantId?: string; // Associated corporate tenant
   roomId: string;
   floor: number;
   officeId?: string; // Tethers to an office
@@ -46,6 +68,7 @@ export interface UserProfile {
 
 export interface ApprovedUser {
   id: string;
+  tenantId?: string; // Associated corporate tenant
   email: string;
   name?: string;
   department?: string;
@@ -55,8 +78,10 @@ export interface ApprovedUser {
 
 export interface AccessKey {
   id: string;
-  token: string;
+  tenantId: string; // Tenant ID or 'ALL' for platform super admin key
+  token: string; // e.g. "ACME-CORP-2025"
   label: string;
+  role?: TenantRole;
   createdBy: string;
   createdAt: number;
   expiresAt?: string; // Optional YYYY-MM-DD
@@ -76,10 +101,15 @@ export type AuditActionType =
   | 'ACCESS_KEY_REVOKED'
   | 'ROOM_MODIFIED'
   | 'ROOM_DELETED'
-  | 'OFFICE_MODIFIED';
+  | 'OFFICE_MODIFIED'
+  | 'TENANT_CREATED'
+  | 'TENANT_UPDATED'
+  | 'TENANT_DELETED'
+  | 'TENANT_SWITCHED';
 
 export interface AuditLog {
   id: string;
+  tenantId?: string; // Scoped to tenant or 'platform'
   action: AuditActionType;
   actorEmail: string;
   actorName: string;
@@ -88,6 +118,7 @@ export interface AuditLog {
   roomName?: string;
   floor?: number;
   officeName?: string;
+  tenantName?: string;
   bookingDateTime?: string; // e.g. "2026-08-20 from 09:00 to 10:30"
   details: string;
   timestamp: number;

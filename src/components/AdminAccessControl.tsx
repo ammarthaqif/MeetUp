@@ -1,14 +1,18 @@
 import React, { useState } from 'react';
 import { 
   ShieldCheck, Key, UserPlus, Users, Trash2, Copy, Check, 
-  Plus, Search, AlertCircle, RefreshCw, UploadCloud, Lock, CheckCircle2 
+  Plus, Search, AlertCircle, RefreshCw, UploadCloud, Lock, CheckCircle2,
+  Shield, UserCheck, X, Building2, Crown
 } from 'lucide-react';
-import { ApprovedUser, AccessKey } from '../types';
+import { ApprovedUser, AccessKey, Tenant } from '../types';
 
 interface AdminAccessControlProps {
   approvedUsers: ApprovedUser[];
   accessKeys: AccessKey[];
   adminEmail: string;
+  currentTenant?: Tenant | null;
+  isMasterAdmin?: boolean;
+  onSaveTenant?: (tenant: Tenant) => void;
   onAddApprovedUser: (email: string, name?: string, department?: string) => Promise<void>;
   onBulkAddApprovedUsers: (emails: string[]) => Promise<number>;
   onRemoveApprovedUser: (userId: string) => Promise<void>;
@@ -21,6 +25,9 @@ export const AdminAccessControl: React.FC<AdminAccessControlProps> = ({
   approvedUsers,
   accessKeys,
   adminEmail,
+  currentTenant,
+  isMasterAdmin = false,
+  onSaveTenant,
   onAddApprovedUser,
   onBulkAddApprovedUsers,
   onRemoveApprovedUser,
@@ -28,8 +35,12 @@ export const AdminAccessControl: React.FC<AdminAccessControlProps> = ({
   onToggleAccessKey,
   onRevokeAccessKey,
 }) => {
-  const [subTab, setSubTab] = useState<'users' | 'keys'>('users');
+  const [subTab, setSubTab] = useState<'focals' | 'users' | 'keys'>('focals');
   
+  // Focal Admin Assignment state (by Superadmin)
+  const [newFocalEmail, setNewFocalEmail] = useState('');
+  const [focalSearch, setFocalSearch] = useState('');
+
   // Single user add state
   const [newEmail, setNewEmail] = useState('');
   const [newName, setNewName] = useState('');
@@ -56,6 +67,47 @@ export const AdminAccessControl: React.FC<AdminAccessControlProps> = ({
   const showNotice = (type: 'success' | 'error', message: string) => {
     setNotification({ type, message });
     setTimeout(() => setNotification(null), 4000);
+  };
+
+  const handleAddFocalAdmin = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!currentTenant || !onSaveTenant) return;
+    const raw = newFocalEmail.trim().toLowerCase();
+    if (!raw) {
+      showNotice('error', 'Please enter a valid focal admin email.');
+      return;
+    }
+    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+    if (!emailRegex.test(raw)) {
+      showNotice('error', 'Invalid email address format.');
+      return;
+    }
+    const currentFocals = currentTenant.focalAdminEmails ? [...currentTenant.focalAdminEmails] : [];
+    if (currentFocals.includes(raw)) {
+      showNotice('error', 'This user is already an assigned focal admin for this company.');
+      return;
+    }
+
+    const updated: Tenant = {
+      ...currentTenant,
+      focalAdminEmails: [...currentFocals, raw]
+    };
+    onSaveTenant(updated);
+    setNewFocalEmail('');
+    showNotice('success', `Assigned focal admin role to ${raw} for ${currentTenant.name}`);
+  };
+
+  const handleRemoveFocalAdmin = (emailToRemove: string) => {
+    if (!currentTenant || !onSaveTenant) return;
+    if (window.confirm(`Revoke company focal admin permissions for "${emailToRemove}"?`)) {
+      const currentFocals = currentTenant.focalAdminEmails ? [...currentTenant.focalAdminEmails] : [];
+      const updated: Tenant = {
+        ...currentTenant,
+        focalAdminEmails: currentFocals.filter(e => e !== emailToRemove)
+      };
+      onSaveTenant(updated);
+      showNotice('success', `Revoked company admin role for ${emailToRemove}`);
+    }
   };
 
   const handleAddUserSubmit = async (e: React.FormEvent) => {
@@ -158,14 +210,26 @@ export const AdminAccessControl: React.FC<AdminAccessControlProps> = ({
         <div>
           <h3 className="font-sans font-bold text-slate-900 text-sm tracking-tight uppercase flex items-center gap-2">
             <ShieldCheck className="w-4.5 h-4.5 text-indigo-600" />
-            Access Control & Booking Permissions
+            Access Control & Role Permissions
           </h3>
           <p className="text-[11px] text-slate-500 font-sans mt-0.5">
-            Manage authorized staff whitelist and generate restricted Secret Access Tokens.
+            {currentTenant ? `Managing permissions for ${currentTenant.name} workspace.` : 'Manage authorized staff whitelist and security keys.'}
           </p>
         </div>
 
         <div className="flex items-center bg-slate-100 p-1 rounded-xl border border-slate-200">
+          <button
+            type="button"
+            onClick={() => setSubTab('focals')}
+            className={`flex items-center gap-1.5 px-3 py-1.5 text-xs font-bold rounded-lg transition-all cursor-pointer ${
+              subTab === 'focals'
+                ? 'bg-white text-indigo-600 shadow-xs ring-1 ring-slate-200'
+                : 'text-slate-600 hover:text-slate-900'
+            }`}
+          >
+            <Crown className="w-3.5 h-3.5 text-amber-500" />
+            <span>Focal Admins ({(currentTenant?.focalAdminEmails || []).length})</span>
+          </button>
           <button
             type="button"
             onClick={() => setSubTab('users')}
@@ -201,6 +265,133 @@ export const AdminAccessControl: React.FC<AdminAccessControlProps> = ({
         }`}>
           {notification.type === 'success' ? <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" /> : <AlertCircle className="w-4 h-4 text-rose-600 shrink-0" />}
           <span>{notification.message}</span>
+        </div>
+      )}
+
+      {/* SUBTAB 0: COMPANY FOCAL ADMINISTRATORS */}
+      {subTab === 'focals' && (
+        <div className="space-y-6">
+          <div className="bg-gradient-to-br from-indigo-50/70 via-slate-50 to-purple-50/40 border border-indigo-100 rounded-3xl p-5 sm:p-6 space-y-4">
+            <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3">
+              <div className="flex items-center gap-3">
+                <div className="w-10 h-10 rounded-2xl bg-indigo-600 text-white flex items-center justify-center shadow-md">
+                  <Crown className="w-5 h-5 text-amber-300" />
+                </div>
+                <div>
+                  <h4 className="text-sm font-bold text-slate-900 flex items-center gap-2">
+                    {currentTenant ? `${currentTenant.name} Focal Administrators` : 'Company Focal Administrators'}
+                    <span className="text-[10px] px-2 py-0.5 rounded-full bg-indigo-100 text-indigo-700 font-semibold border border-indigo-200">
+                      Company Admin Role
+                    </span>
+                  </h4>
+                  <p className="text-xs text-slate-600 mt-0.5">
+                    Assigned focal personnel who hold administrative authority restricted to manage this company's dashboard, offices, rooms, bookings, and staff access.
+                  </p>
+                </div>
+              </div>
+
+              <div className="text-right">
+                <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-slate-900 text-white text-[11px] font-mono">
+                  <ShieldCheck className="w-3.5 h-3.5 text-emerald-400" />
+                  Superadmin: ammarthaqif.ar@gmail.com
+                </span>
+              </div>
+            </div>
+
+            {/* Superadmin Assignment Form if Superadmin or onSaveTenant is provided */}
+            {isMasterAdmin && onSaveTenant && (
+              <form onSubmit={handleAddFocalAdmin} className="pt-3 border-t border-indigo-100/80 flex flex-col sm:flex-row gap-2">
+                <div className="flex-1 relative">
+                  <UserPlus className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
+                  <input
+                    type="email"
+                    required
+                    value={newFocalEmail}
+                    onChange={(e) => setNewFocalEmail(e.target.value)}
+                    placeholder="Enter email to grant Focal Admin access (e.g. director@company.com)..."
+                    className="w-full bg-white border border-indigo-200 rounded-xl pl-9 pr-3.5 py-2 text-xs text-slate-800 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-indigo-500 font-medium"
+                  />
+                </div>
+                <button
+                  type="submit"
+                  className="px-4 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-bold transition-all cursor-pointer flex items-center justify-center gap-1.5 shadow-sm shrink-0"
+                >
+                  <Plus className="w-4 h-4" />
+                  <span>Assign Company Admin</span>
+                </button>
+              </form>
+            )}
+          </div>
+
+          {/* Focal Admins List */}
+          <div className="bg-white border border-slate-200 rounded-2xl p-4 sm:p-5 space-y-4 shadow-xs">
+            <div className="flex items-center justify-between">
+              <span className="text-xs font-bold text-slate-800 uppercase tracking-tight flex items-center gap-2">
+                <Users className="w-4 h-4 text-indigo-600" />
+                Active Company Focal Admins ({(currentTenant?.focalAdminEmails || []).length})
+              </span>
+              <span className="text-[11px] text-slate-500">
+                {isMasterAdmin ? 'Managed by Master Superadmin' : 'Delegated Admin Scope'}
+              </span>
+            </div>
+
+            {(!currentTenant?.focalAdminEmails || currentTenant.focalAdminEmails.length === 0) ? (
+              <div className="text-center py-8 px-4 bg-slate-50 rounded-xl border border-dashed border-slate-200 text-slate-500 space-y-2">
+                <AlertCircle className="w-6 h-6 text-slate-400 mx-auto" />
+                <div className="text-xs font-semibold text-slate-700">No designated company focal admin assigned yet</div>
+                <p className="text-[11px] text-slate-500 max-w-md mx-auto">
+                  Only the Master System Super Administrator (<code className="text-indigo-600 font-mono">ammarthaqif.ar@gmail.com</code>) can manage and assign focal administrators for each tenant organization.
+                </p>
+              </div>
+            ) : (
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                {currentTenant.focalAdminEmails.map((email, idx) => {
+                  const isCurrentAdmin = email.toLowerCase() === adminEmail.toLowerCase();
+                  return (
+                    <div
+                      key={email}
+                      className={`p-4 rounded-xl border flex items-center justify-between gap-3 transition-all ${
+                        isCurrentAdmin 
+                          ? 'bg-indigo-50/50 border-indigo-200 ring-1 ring-indigo-300/50'
+                          : 'bg-slate-50/70 border-slate-200/80 hover:bg-slate-50'
+                      }`}
+                    >
+                      <div className="flex items-center gap-3 min-w-0">
+                        <div className="w-9 h-9 rounded-xl bg-indigo-600 text-white font-bold flex items-center justify-center text-xs shrink-0 shadow-xs">
+                          {email.substring(0, 2).toUpperCase()}
+                        </div>
+                        <div className="min-w-0">
+                          <div className="text-xs font-bold text-slate-900 truncate flex items-center gap-1.5">
+                            <span>{email}</span>
+                            {isCurrentAdmin && (
+                              <span className="text-[9px] px-1.5 py-0.2 rounded bg-indigo-600 text-white font-semibold">
+                                You
+                              </span>
+                            )}
+                          </div>
+                          <div className="text-[10px] text-slate-500 font-mono flex items-center gap-1 mt-0.5">
+                            <span className="w-1.5 h-1.5 rounded-full bg-emerald-500" />
+                            <span>Authorized Focal Admin &bull; {currentTenant.code}</span>
+                          </div>
+                        </div>
+                      </div>
+
+                      {isMasterAdmin && (
+                        <button
+                          type="button"
+                          onClick={() => handleRemoveFocalAdmin(email)}
+                          className="p-1.5 rounded-lg text-slate-400 hover:text-rose-600 hover:bg-rose-50 transition-colors cursor-pointer shrink-0"
+                          title="Revoke Admin Access"
+                        >
+                          <Trash2 className="w-4 h-4" />
+                        </button>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </div>
         </div>
       )}
 

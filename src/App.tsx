@@ -8,7 +8,7 @@ import { onAuthStateChanged, User as FirebaseUser } from 'firebase/auth';
 import { 
   CalendarDays, Building2, Filter, Search, CheckCircle, 
   X, AlertTriangle, ArrowRight, ShieldCheck, Key, MapPin, Sparkles, ShieldAlert,
-  Clock, CalendarRange, Calendar, Lock, Shield
+  Clock, CalendarRange, Calendar, Lock, Shield, Briefcase
 } from 'lucide-react';
 
 // Subcomponents
@@ -25,142 +25,51 @@ import { InteractiveFloorPlan } from './components/InteractiveFloorPlan';
 import { MyBookings } from './components/MyBookings';
 import { AdminPanel } from './components/AdminPanel';
 import { SimulatedInbox, SimulatedEmail } from './components/SimulatedInbox';
+import { TenantPortalGate } from './components/TenantPortalGate';
+import { TenantSwitcherModal } from './components/TenantSwitcherModal';
 
 // Types and Utilities
-import { Booking, Room, Office, ApprovedUser, AccessKey, AuditLog, AuditActionType } from './types';
-import { formatFriendlyDate } from './utils';
-import { ROOMS as DEFAULT_ROOMS } from './roomsData';
+import { Booking, Room, Office, ApprovedUser, AccessKey, AuditLog, AuditActionType, Tenant } from './types';
+import { formatFriendlyDate, timeToMinutes } from './utils';
+import { 
+  DEFAULT_TENANTS, 
+  DEFAULT_TENANT_ACCESS_KEYS, 
+  DEFAULT_MULTI_TENANT_OFFICES, 
+  DEFAULT_MULTI_TENANT_ROOMS, 
+  DEFAULT_MULTI_TENANT_APPROVED_USERS, 
+  DEFAULT_MULTI_TENANT_BOOKINGS 
+} from './data/defaultTenants';
 
 const ADMIN_EMAIL = 'ammarthaqif.ar@gmail.com';
-
-const DEFAULT_INITIAL_OFFICES: Office[] = [
-  {
-    id: 'office-singapore-hq',
-    name: 'Downtown Singapore HQ',
-    location: 'Marina Bay Financial Centre, Tower 2',
-    passkey: 'SG123',
-    floors: [1, 2, 3, 4],
-    createdAt: 1700000000000
-  },
-  {
-    id: 'office-silicon-valley',
-    name: 'West Tech Center (Silicon Valley)',
-    location: '456 Innovation Way, Building 2',
-    passkey: 'SV456',
-    floors: [1, 2],
-    createdAt: 1700000000000
-  }
-];
-
-const DEFAULT_INITIAL_BOOKINGS: Booking[] = [
-  {
-    id: 'sample-booking-1',
-    roomId: 'f1-arena',
-    floor: 1,
-    officeId: 'office-singapore-hq',
-    title: 'Product All-Hands & Strategy Sync',
-    description: 'Quarterly review with engineering and design leads.',
-    date: new Date().toISOString().split('T')[0],
-    startTime: '10:00',
-    endTime: '12:00',
-    hostName: 'Sarah Lin',
-    hostEmail: 'sarah.lin@workspace.corp',
-    hostUid: 'user-sample-1',
-    attendees: ['alex@workspace.corp', 'dev-team@workspace.corp'],
-    createdAt: Date.now() - 3600000,
-  },
-  {
-    id: 'sample-booking-2',
-    roomId: 'f1-orion',
-    floor: 1,
-    officeId: 'office-singapore-hq',
-    title: 'Client Pitch: Vertex Ventures',
-    description: 'Executive partnership presentation.',
-    date: new Date().toISOString().split('T')[0],
-    startTime: '14:00',
-    endTime: '15:30',
-    hostName: 'David Chen',
-    hostEmail: 'david.chen@workspace.corp',
-    hostUid: 'user-sample-2',
-    attendees: ['partners@vertex.vc'],
-    createdAt: Date.now() - 7200000,
-  }
-];
-
-const DEFAULT_APPROVED_USERS: ApprovedUser[] = [
-  {
-    id: 'usr-admin-1',
-    email: 'ammarthaqif.ar@gmail.com',
-    name: 'Ammar Thaqif',
-    department: 'Executive Administration',
-    addedAt: 1700000000000,
-    addedBy: 'System'
-  },
-  {
-    id: 'usr-staff-1',
-    email: 'sarah.lin@workspace.corp',
-    name: 'Sarah Lin',
-    department: 'Product & Design',
-    addedAt: 1700000000000,
-    addedBy: 'ammarthaqif.ar@gmail.com'
-  },
-  {
-    id: 'usr-staff-2',
-    email: 'david.chen@workspace.corp',
-    name: 'David Chen',
-    department: 'Engineering',
-    addedAt: 1700000000000,
-    addedBy: 'ammarthaqif.ar@gmail.com'
-  }
-];
-
-const DEFAULT_ACCESS_KEYS: AccessKey[] = [
-  {
-    id: 'key-hq-standard',
-    token: 'SEC-HQ2026-PASS',
-    label: 'Corporate Staff Access Pass',
-    active: true,
-    createdAt: 1700000000000,
-    createdBy: 'ammarthaqif.ar@gmail.com',
-    usedCount: 0
-  },
-  {
-    id: 'key-vip-exec',
-    token: 'SEC-VIP77-TOKEN',
-    label: 'Visiting Partner & Vendor Token',
-    active: true,
-    createdAt: 1700000000000,
-    createdBy: 'ammarthaqif.ar@gmail.com',
-    usedCount: 0
-  }
-];
 
 const DEFAULT_AUDIT_LOGS: AuditLog[] = [
   {
     id: 'log-seed-1',
+    tenantId: 'tenant-acme',
     action: 'BOOKING_CREATED',
-    actorEmail: 'sarah.lin@workspace.corp',
+    actorEmail: 'sarah.lin@acme.corp',
     actorName: 'Sarah Lin',
-    targetTitle: 'Product All-Hands & Strategy Sync',
+    targetTitle: 'Q3 Product Roadmap Sync',
     roomName: 'The Arena',
     floor: 1,
-    officeName: 'Downtown Singapore HQ',
+    officeName: 'Acme One Financial Tower',
     bookingDateTime: `${new Date().toISOString().split('T')[0]} (10:00 - 12:00)`,
-    details: 'Created reservation "Product All-Hands & Strategy Sync" in The Arena (Level 1)',
+    details: 'Created reservation "Q3 Product Roadmap Sync" in The Arena (Level 1)',
     timestamp: Date.now() - 3600000,
     formattedTimestamp: new Date(Date.now() - 3600000).toLocaleString('en-US')
   },
   {
     id: 'log-seed-2',
+    tenantId: 'tenant-nexus',
     action: 'BOOKING_CREATED',
-    actorEmail: 'david.chen@workspace.corp',
-    actorName: 'David Chen',
-    targetTitle: 'Client Pitch: Vertex Ventures',
-    roomName: 'Orion Boardroom',
+    actorEmail: 'alex.vance@nexuscap.com',
+    actorName: 'Alex Vance',
+    targetTitle: 'Portfolio Risk Review',
+    roomName: 'Alpha Trading Room',
     floor: 1,
-    officeName: 'Downtown Singapore HQ',
+    officeName: 'Nexus Tower One',
     bookingDateTime: `${new Date().toISOString().split('T')[0]} (14:00 - 15:30)`,
-    details: 'Created reservation "Client Pitch: Vertex Ventures" in Orion Boardroom (Level 1)',
+    details: 'Created reservation "Portfolio Risk Review" in Alpha Trading Room (Level 1)',
     timestamp: Date.now() - 7200000,
     formattedTimestamp: new Date(Date.now() - 7200000).toLocaleString('en-US')
   }
@@ -176,31 +85,60 @@ export default function App() {
   const [capacityFilter, setCapacityFilter] = useState<string>('all');
   const [selectedAmenities, setSelectedAmenities] = useState<string[]>([]);
   
+  // Multi-Tenancy States
+  const [tenants, setTenants] = useState<Tenant[]>(() => {
+    try {
+      const saved = localStorage.getItem('office_sync_tenants');
+      return saved ? JSON.parse(saved) : DEFAULT_TENANTS;
+    } catch {
+      return DEFAULT_TENANTS;
+    }
+  });
+
+  const [activeTenant, setActiveTenant] = useState<Tenant | null>(() => {
+    try {
+      const saved = localStorage.getItem('office_sync_active_tenant');
+      return saved ? JSON.parse(saved) : null;
+    } catch {
+      return null;
+    }
+  });
+
+  const [tenantAccessToken, setTenantAccessToken] = useState<string>(() => {
+    try {
+      return localStorage.getItem('office_sync_tenant_token') || '';
+    } catch {
+      return '';
+    }
+  });
+
+  const [isTenantSwitcherOpen, setIsTenantSwitcherOpen] = useState(false);
+
   // Dynamic Database States (with instant offline fallback)
   const [offices, setOffices] = useState<Office[]>(() => {
     try {
       const saved = localStorage.getItem('office_sync_offices');
-      return saved ? JSON.parse(saved) : DEFAULT_INITIAL_OFFICES;
+      return saved ? JSON.parse(saved) : DEFAULT_MULTI_TENANT_OFFICES;
     } catch {
-      return DEFAULT_INITIAL_OFFICES;
+      return DEFAULT_MULTI_TENANT_OFFICES;
     }
   });
 
   const [rooms, setRooms] = useState<Room[]>(() => {
     try {
       const saved = localStorage.getItem('office_sync_rooms');
-      return saved ? JSON.parse(saved) : DEFAULT_ROOMS;
+      return saved ? JSON.parse(saved) : DEFAULT_MULTI_TENANT_ROOMS;
     } catch {
-      return DEFAULT_ROOMS;
+      return DEFAULT_MULTI_TENANT_ROOMS;
     }
   });
 
   const [bookings, setBookings] = useState<Booking[]>(() => {
     try {
       const saved = localStorage.getItem('office_sync_bookings');
-      return saved ? JSON.parse(saved) : DEFAULT_INITIAL_BOOKINGS;
+      return saved ? JSON.parse(saved) : DEFAULT_MULTI_TENANT_BOOKINGS;
     } catch {
-      return DEFAULT_INITIAL_BOOKINGS;
+      return DEFAULT_MULTI_TENANT_BOOKINGS;
     }
   });
 
@@ -208,9 +146,9 @@ export default function App() {
   const [approvedUsers, setApprovedUsers] = useState<ApprovedUser[]>(() => {
     try {
       const saved = localStorage.getItem('office_sync_approved_users');
-      return saved ? JSON.parse(saved) : DEFAULT_APPROVED_USERS;
+      return saved ? JSON.parse(saved) : DEFAULT_MULTI_TENANT_APPROVED_USERS;
     } catch {
-      return DEFAULT_APPROVED_USERS;
+      return DEFAULT_MULTI_TENANT_APPROVED_USERS;
     }
   });
 
@@ -218,9 +156,9 @@ export default function App() {
   const [accessKeys, setAccessKeys] = useState<AccessKey[]>(() => {
     try {
       const saved = localStorage.getItem('office_sync_access_keys');
-      return saved ? JSON.parse(saved) : DEFAULT_ACCESS_KEYS;
+      return saved ? JSON.parse(saved) : DEFAULT_TENANT_ACCESS_KEYS;
     } catch {
-      return DEFAULT_ACCESS_KEYS;
+      return DEFAULT_TENANT_ACCESS_KEYS;
     }
   });
 
@@ -238,9 +176,9 @@ export default function App() {
   const [verifiedTokens, setVerifiedTokens] = useState<string[]>(() => {
     try {
       const saved = localStorage.getItem('office_sync_verified_tokens');
-      return saved ? JSON.parse(saved) : ['SEC-HQ2026-PASS'];
+      return saved ? JSON.parse(saved) : ['ACME-CORP-2025', 'MASTER-PLATFORM-ADMIN-2026'];
     } catch {
-      return ['SEC-HQ2026-PASS'];
+      return ['ACME-CORP-2025', 'MASTER-PLATFORM-ADMIN-2026'];
     }
   });
 
@@ -306,7 +244,40 @@ export default function App() {
     }, 4500);
   };
 
+  // Master Admin & Company Focal Admin permissions
+  const isMasterAdmin = (tenantAccessToken === 'MASTER-PLATFORM-ADMIN-2026') || (user?.email?.toLowerCase() === ADMIN_EMAIL.toLowerCase());
+  
+  const isFocalAdmin = !!user?.email && !!activeTenant?.focalAdminEmails && activeTenant.focalAdminEmails.some(
+    email => email.trim().toLowerCase() === user.email?.trim().toLowerCase()
+  );
+
   // Synchronize local states to localStorage for instant offline access
+  useEffect(() => {
+    try {
+      localStorage.setItem('office_sync_tenants', JSON.stringify(tenants));
+    } catch {}
+  }, [tenants]);
+
+  useEffect(() => {
+    try {
+      if (activeTenant) {
+        localStorage.setItem('office_sync_active_tenant', JSON.stringify(activeTenant));
+      } else {
+        localStorage.removeItem('office_sync_active_tenant');
+      }
+    } catch {}
+  }, [activeTenant]);
+
+  useEffect(() => {
+    try {
+      if (tenantAccessToken) {
+        localStorage.setItem('office_sync_tenant_token', tenantAccessToken);
+      } else {
+        localStorage.removeItem('office_sync_tenant_token');
+      }
+    } catch {}
+  }, [tenantAccessToken]);
+
   useEffect(() => {
     try {
       localStorage.setItem('office_sync_offices', JSON.stringify(offices));
@@ -363,10 +334,12 @@ export default function App() {
     officeName?: string;
     bookingDateTime?: string;
     details: string;
+    tenantId?: string;
   }) => {
     const now = new Date();
     const newLog: AuditLog = {
       id: `audit-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
+      tenantId: data.tenantId || activeTenant?.id || 'platform',
       action: data.action,
       actorEmail: data.actorEmail || user?.email || 'Authorized Token User',
       actorName: data.actorName || user?.displayName || 'Authorized User',
@@ -402,24 +375,230 @@ export default function App() {
   // -------------------------------------------------------------
   const isUserAuthorizedToBook = (): boolean => {
     // 1. Super Admin is always authorized
-    if (user?.email?.toLowerCase() === ADMIN_EMAIL.toLowerCase()) return true;
+    if (isMasterAdmin || user?.email?.toLowerCase() === ADMIN_EMAIL.toLowerCase()) return true;
 
     // 2. User logged in with whitelisted email
     if (user?.email) {
-      const isApproved = approvedUsers.some(u => u.email.toLowerCase() === user.email?.toLowerCase());
+      const isApproved = approvedUsers.some(u => 
+        u.email.toLowerCase() === user.email?.toLowerCase() &&
+        (!activeTenant || !u.tenantId || u.tenantId === activeTenant.id)
+      );
       if (isApproved) return true;
     }
 
-    // 3. User unlocked with a valid, active Secret Access Key Token
-    const hasValidKey = accessKeys.some(k => k.active && verifiedTokens.includes(k.token));
+    // 3. User unlocked with a valid, active Secret Access Key Token for current tenant
+    const hasValidKey = accessKeys.some(k => 
+      k.active && 
+      verifiedTokens.includes(k.token) &&
+      (!activeTenant || k.tenantId === 'ALL' || !k.tenantId || k.tenantId === activeTenant.id)
+    );
     if (hasValidKey) return true;
 
     return false;
   };
 
   // -------------------------------------------------------------
+  // Tenant Handlers (Unlock, Switch, Lock, Save, Delete)
+  // -------------------------------------------------------------
+  const handleUnlockTenant = (tenant: Tenant, token: string, role: 'company_admin' | 'staff' | 'guest') => {
+    setActiveTenant(tenant);
+    setTenantAccessToken(token);
+    
+    // Add token to verified tokens
+    setVerifiedTokens(prev => {
+      const updated = Array.from(new Set([...prev, token]));
+      try {
+        localStorage.setItem('office_sync_verified_tokens', JSON.stringify(updated));
+      } catch {}
+      return updated;
+    });
+
+    // Auto-select first office belonging to this tenant
+    const tenantOffices = offices.filter(o => !o.tenantId || o.tenantId === tenant.id);
+    if (tenantOffices.length > 0) {
+      setActiveOffice(tenantOffices[0]);
+      setSelectedFloor(tenantOffices[0].floors[0] || 1);
+    } else {
+      setActiveOffice(null);
+    }
+
+    logActivity({
+      action: 'TOKEN_ACCESS_GRANTED',
+      details: `Unlocked workspace "${tenant.name}" with access token (${token}) as ${role}.`,
+      tenantId: tenant.id
+    });
+
+    showNotification('success', `Welcome to ${tenant.name}! Workspace unlocked.`);
+  };
+
+  const handleUnlockMasterAdmin = (token: string) => {
+    setTenantAccessToken('MASTER-PLATFORM-ADMIN-2026');
+    const primaryTenant = tenants[0] || DEFAULT_TENANTS[0];
+    setActiveTenant(primaryTenant);
+    
+    const tenantOffices = offices.filter(o => !o.tenantId || o.tenantId === primaryTenant.id);
+    if (tenantOffices.length > 0) {
+      setActiveOffice(tenantOffices[0]);
+      setSelectedFloor(tenantOffices[0].floors[0] || 1);
+    }
+
+    logActivity({
+      action: 'TOKEN_ACCESS_GRANTED',
+      details: `Master Platform Administrator console activated with bypass key.`,
+      tenantId: primaryTenant.id
+    });
+
+    showNotification('success', 'Master Platform Administrator privileges granted.');
+  };
+
+  const handleSwitchTenant = (tenant: Tenant, token?: string) => {
+    setActiveTenant(tenant);
+    if (token) {
+      setTenantAccessToken(token);
+    }
+    
+    const tenantOffices = offices.filter(o => !o.tenantId || o.tenantId === tenant.id);
+    if (tenantOffices.length > 0) {
+      setActiveOffice(tenantOffices[0]);
+      setSelectedFloor(tenantOffices[0].floors[0] || 1);
+    } else {
+      setActiveOffice(null);
+    }
+
+    logActivity({
+      action: 'TENANT_SWITCHED',
+      details: `Switched active organization context to "${tenant.name}".`,
+      tenantId: tenant.id
+    });
+
+    showNotification('info', `Switched organization to ${tenant.name}.`);
+  };
+
+  const handleLockTenant = () => {
+    setActiveTenant(null);
+    setTenantAccessToken('');
+    setActiveOffice(null);
+    setIsAdminMode(false);
+    try {
+      localStorage.removeItem('office_sync_active_tenant');
+      localStorage.removeItem('office_sync_tenant_token');
+      localStorage.removeItem('office_sync_active_office');
+      localStorage.removeItem('office_sync_admin_mode');
+    } catch {}
+
+    showNotification('info', 'Workspace locked. Please provide access token to re-enter.');
+  };
+
+  const handleSaveTenant = async (tenantData: Tenant) => {
+    const isExisting = tenants.some(t => t.id === tenantData.id);
+    if (isExisting) {
+      setTenants(prev => prev.map(t => t.id === tenantData.id ? tenantData : t));
+      if (activeTenant?.id === tenantData.id) {
+        setActiveTenant(tenantData);
+      }
+    } else {
+      setTenants(prev => [...prev, tenantData]);
+    }
+
+    try {
+      if (db) {
+        setDoc(doc(db, 'tenants', tenantData.id), tenantData, { merge: true }).catch(() => {});
+      }
+    } catch {}
+
+    logActivity({
+      action: isExisting ? 'TENANT_UPDATED' : 'TENANT_CREATED',
+      details: `${isExisting ? 'Updated' : 'Provisioned new'} tenant organization "${tenantData.name}" (${tenantData.code})`,
+      tenantId: tenantData.id
+    });
+
+    showNotification('success', `Saved organization settings for "${tenantData.name}".`);
+  };
+
+  const handleDeleteTenant = async (tenantId: string) => {
+    const target = tenants.find(t => t.id === tenantId);
+    if (!target) return;
+
+    setTenants(prev => prev.filter(t => t.id !== tenantId));
+    try {
+      if (db) {
+        deleteDoc(doc(db, 'tenants', tenantId)).catch(() => {});
+      }
+    } catch {}
+
+    logActivity({
+      action: 'TENANT_DELETED',
+      details: `Deleted tenant organization "${target.name}" (${target.code})`,
+      tenantId: target.id
+    });
+
+    if (activeTenant?.id === tenantId) {
+      handleLockTenant();
+    }
+
+    showNotification('info', `Tenant "${target.name}" removed.`);
+  };
+
+  const handleGenerateTenantToken = async (tenantId: string, label: string, role: 'company_admin' | 'staff' | 'guest'): Promise<AccessKey> => {
+    const tenant = tenants.find(t => t.id === tenantId);
+    const prefix = tenant ? tenant.code : 'CORP';
+    const randomSuffix = Math.floor(1000 + Math.random() * 9000);
+    const tokenString = `${prefix}-${role.toUpperCase().replace('_', '')}-${randomSuffix}`;
+    
+    const newKey: AccessKey = {
+      id: `key-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
+      tenantId,
+      token: tokenString,
+      label,
+      role,
+      active: true,
+      createdAt: Date.now(),
+      createdBy: user?.email || ADMIN_EMAIL,
+      usedCount: 0
+    };
+
+    setAccessKeys(prev => [newKey, ...prev]);
+    try {
+      if (db) {
+        setDoc(doc(db, 'access_keys', newKey.id), newKey).catch(() => {});
+      }
+    } catch {}
+
+    logActivity({
+      action: 'ACCESS_KEY_GENERATED',
+      details: `Issued new access key "${tokenString}" for ${tenant?.name || 'organization'} (${label}) with role ${role}.`,
+      tenantId
+    });
+
+    showNotification('success', `Generated ${role} access key: ${tokenString}`);
+    return newKey;
+  };
+
+  // -------------------------------------------------------------
   // DB Listeners & Online Hydration (with resilient offline fallback)
   // -------------------------------------------------------------
+  
+  // Real-time listen to Tenants
+  useEffect(() => {
+    try {
+      if (!db) return;
+      const tenantsCollection = collection(db, 'tenants');
+      const unsubscribe = onSnapshot(tenantsCollection, (snapshot) => {
+        if (!snapshot.empty) {
+          const tenantList: Tenant[] = [];
+          snapshot.forEach((docSnap) => {
+            tenantList.push({ id: docSnap.id, ...docSnap.data() } as Tenant);
+          });
+          setTenants(tenantList);
+        }
+      }, (error) => {
+        console.warn('Operating in offline local cache mode for tenants:', error.message);
+      });
+      return () => unsubscribe();
+    } catch (e) {
+      console.warn('Firestore tenants initialization offline fallback:', e);
+    }
+  }, []);
   
   // Real-time listen to Offices
   useEffect(() => {
@@ -642,15 +821,22 @@ export default function App() {
   };
 
   // -------------------------------------------------------------
-  // Admin Mode Entry: STRICTLY RESTRICTED TO ammarthaqif.ar@gmail.com
+  // Admin Mode Entry: STRICTLY RESTRICTED TO ammarthaqif.ar@gmail.com (Superadmin)
+  // OR Assigned Focal Admins for their respective company dashboard
   // -------------------------------------------------------------
   const handleOpenAdminConsole = () => {
-    if (user && user.email?.toLowerCase() === ADMIN_EMAIL.toLowerCase()) {
+    if (isMasterAdmin) {
       setIsAdminMode(true);
       try {
         localStorage.setItem('office_sync_admin_mode', 'true');
       } catch {}
-      showNotification('success', 'Admin Control Room unlocked for ' + ADMIN_EMAIL);
+      showNotification('success', 'Master Superadmin Control Room unlocked for ' + ADMIN_EMAIL);
+    } else if (isFocalAdmin) {
+      setIsAdminMode(true);
+      try {
+        localStorage.setItem('office_sync_admin_mode', 'true');
+      } catch {}
+      showNotification('success', `Company Focal Admin Console unlocked for ${activeTenant?.name || 'Company'}`);
     } else {
       setShowAdminRestrictionModal(true);
     }
@@ -734,6 +920,57 @@ export default function App() {
     if (!room) throw new Error('Selected room is invalid.');
 
     const emailToDeliver = bookingData.hostEmail.trim() || user?.email || 'staff@company-workspace.com';
+    const startMin = timeToMinutes(bookingData.startTime);
+    const endMin = timeToMinutes(bookingData.endTime);
+
+    if (endMin <= startMin) {
+      const timeErrorMsg = 'Invalid time interval: Meeting end time must be after the start time.';
+      showNotification('error', timeErrorMsg);
+      throw new Error(timeErrorMsg);
+    }
+
+    // -------------------------------------------------------------
+    // Client-side Overlap Conflict Validation Check
+    // -------------------------------------------------------------
+    if (bookingData.multiDates && bookingData.multiDates.length > 0) {
+      for (const d of bookingData.multiDates) {
+        const conflictingBooking = bookings.find(b => {
+          if (bookingData.id && b.id === bookingData.id) return false;
+          if (b.roomId !== bookingData.roomId) return false;
+          if (b.date !== d) return false;
+          const bStart = timeToMinutes(b.startTime);
+          const bEnd = timeToMinutes(b.endTime);
+          return Math.max(startMin, bStart) < Math.min(endMin, bEnd);
+        });
+
+        if (conflictingBooking) {
+          const hostLabel = conflictingBooking.hostName 
+            ? `${conflictingBooking.hostName} (${conflictingBooking.hostEmail})` 
+            : conflictingBooking.hostEmail;
+          const conflictMsg = `Room Conflict Warning: "${room.name}" (Lvl ${room.floor}) is already reserved on ${conflictingBooking.date} from ${conflictingBooking.startTime} to ${conflictingBooking.endTime} for "${conflictingBooking.title}" (Host: ${hostLabel}).`;
+          showNotification('error', conflictMsg);
+          throw new Error(conflictMsg);
+        }
+      }
+    } else {
+      const conflictingBooking = bookings.find(b => {
+        if (bookingData.id && b.id === bookingData.id) return false;
+        if (b.roomId !== bookingData.roomId) return false;
+        if (b.date !== bookingData.date) return false;
+        const bStart = timeToMinutes(b.startTime);
+        const bEnd = timeToMinutes(b.endTime);
+        return Math.max(startMin, bStart) < Math.min(endMin, bEnd);
+      });
+
+      if (conflictingBooking) {
+        const hostLabel = conflictingBooking.hostName 
+          ? `${conflictingBooking.hostName} (${conflictingBooking.hostEmail})` 
+          : conflictingBooking.hostEmail;
+        const conflictMsg = `Room Conflict Warning: "${room.name}" (Lvl ${room.floor}) is already booked for "${conflictingBooking.title}" on ${conflictingBooking.date} (${conflictingBooking.startTime} - ${conflictingBooking.endTime}) by ${hostLabel}. Please select another time slot or room.`;
+        showNotification('error', conflictMsg);
+        throw new Error(conflictMsg);
+      }
+    }
 
     // Handle Multi-day recurring saves
     if (bookingData.multiDates && bookingData.multiDates.length > 0) {
@@ -781,12 +1018,13 @@ export default function App() {
 
       setBookings(prev => [...createdBookings, ...prev]);
 
+      const dateSpanLabel = `${bookingData.multiDates[0]} to ${bookingData.multiDates[bookingData.multiDates.length - 1]}`;
       const newEmail: SimulatedEmail = {
         id: `email-${Date.now()}`,
         to: emailToDeliver,
-        subject: `[CONFIRMED] Multi-Day Room Reservation: "${bookingData.title}"`,
+        subject: `[CONFIRMED] Recurring Series: "${bookingData.title}" (${bookingData.multiDates.length} Sessions)`,
         date: new Date().toLocaleString(),
-        body: `Successful booking across ${bookingData.multiDates.length} days!`,
+        body: `Successful reservation for ${room.name} across ${bookingData.multiDates.length} sessions (${dateSpanLabel}) at ${bookingData.startTime} - ${bookingData.endTime}.`,
         details: {
           title: bookingData.title,
           roomName: room.name,
@@ -801,7 +1039,7 @@ export default function App() {
         }
       };
       setSimulatedEmails(prev => [newEmail, ...prev]);
-      showNotification('success', `Successfully reserved ${room.name} over ${bookingData.multiDates.length} days.`);
+      showNotification('success', `Successfully reserved ${room.name} across ${bookingData.multiDates.length} recurring dates (${dateSpanLabel})!`);
 
     } else {
       // Single booking save
@@ -1220,6 +1458,7 @@ export default function App() {
 
     const newKey: AccessKey = {
       id,
+      tenantId: activeTenant?.id || 'ALL',
       token,
       label: data.label,
       expiresAt: data.expiresAt,
@@ -1240,6 +1479,7 @@ export default function App() {
     logActivity({
       action: 'ACCESS_KEY_GENERATED',
       details: `Generated Secret Token "${newKey.label}" (${newKey.token}) with ${newKey.maxUses ? `${newKey.maxUses} uses` : 'unlimited uses'}`,
+      tenantId: activeTenant?.id
     });
 
     return newKey;
@@ -1293,10 +1533,33 @@ export default function App() {
   };
 
   // -------------------------------------------------------------
-  // Filtering Algorithm (Current Office context)
+  // Filtering Algorithm (Current Tenant & Office context)
   // -------------------------------------------------------------
-  const currentOfficeRooms = rooms.filter(r => r.officeId === activeOffice?.id);
-  const currentOfficeBookings = bookings.filter(b => b.officeId === activeOffice?.id);
+  const currentTenantOffices = offices.filter(o => 
+    !activeTenant || !o.tenantId || o.tenantId === activeTenant.id
+  );
+
+  const currentOfficeRooms = rooms.filter(r => 
+    (!activeTenant || !r.tenantId || r.tenantId === activeTenant.id) &&
+    (!activeOffice || r.officeId === activeOffice.id)
+  );
+
+  const currentOfficeBookings = bookings.filter(b => 
+    (!activeTenant || !b.tenantId || b.tenantId === activeTenant.id) &&
+    (!activeOffice || b.officeId === activeOffice.id)
+  );
+
+  const currentTenantAccessKeys = accessKeys.filter(k => 
+    !activeTenant || k.tenantId === 'ALL' || !k.tenantId || k.tenantId === activeTenant.id
+  );
+
+  const currentTenantApprovedUsers = approvedUsers.filter(u => 
+    !activeTenant || !u.tenantId || u.tenantId === activeTenant.id
+  );
+
+  const currentTenantAuditLogs = auditLogs.filter(l => 
+    !activeTenant || !l.tenantId || l.tenantId === 'platform' || l.tenantId === activeTenant.id
+  );
 
   const allUniqueAmenities = Array.from(
     new Set(currentOfficeRooms.flatMap(room => room.amenities))
@@ -1330,15 +1593,15 @@ export default function App() {
   });
 
   // Timeline & room selection triggers (Protected with Auth & Whitelist Gate)
-  const handleRoomBookClick = (room: Room) => {
+  const handleRoomBookClick = (room: Room, hour?: string, endTime?: string) => {
     if (!isUserAuthorizedToBook()) {
-      setPendingBookingIntent({ room, hour: null, date: selectedDate });
+      setPendingBookingIntent({ room, hour: hour || null, date: selectedDate, endTime: endTime || undefined });
       setIsAuthModalOpen(true);
       return;
     }
     setSelectedRoomForModal(room);
-    setSelectedHourForModal(null);
-    setSelectedEndTimeForModal(undefined);
+    setSelectedHourForModal(hour || null);
+    setSelectedEndTimeForModal(endTime || undefined);
     setEditingBooking(null);
     setIsModalOpen(true);
   };
@@ -1423,9 +1686,13 @@ export default function App() {
         onLogout={handleLogoutGoogle}
         isLoggingIn={isLoggingIn}
         googleToken={googleToken}
+        activeTenant={activeTenant}
+        onOpenTenantSwitcher={() => setIsTenantSwitcherOpen(true)}
         activeOffice={activeOffice}
         onSwitchOffice={handleSwitchOffice}
         isAdminMode={isAdminMode}
+        isMasterAdmin={isMasterAdmin}
+        isFocalAdmin={isFocalAdmin}
         onOpenAdminAuth={handleOpenAdminConsole}
         onExitAdminMode={handleExitAdminMode}
         onOpenRoomFinder={() => setIsRoomFinderOpen(true)}
@@ -1433,9 +1700,22 @@ export default function App() {
       />
 
       {/* Main View Router */}
-      {isAdminMode ? (
+      {!activeTenant ? (
         
-        /* Admin Management Console (Restricted strictly to ammarthaqif.ar@gmail.com) */
+        /* 1. Multi-Tenant Access Token Entry Gate */
+        <TenantPortalGate
+          tenants={tenants}
+          accessKeys={accessKeys}
+          onUnlockTenant={handleUnlockTenant}
+          onUnlockMasterAdmin={handleUnlockMasterAdmin}
+          user={user}
+          onLoginGoogle={handleLoginGoogle}
+          isLoggingIn={isLoggingIn}
+        />
+
+      ) : isAdminMode ? (
+        
+        /* 2. Admin Management Console */
         <main className="flex-1 max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6 w-full">
           <AdminPanel
             offices={offices}
@@ -1445,6 +1725,13 @@ export default function App() {
             accessKeys={accessKeys}
             auditLogs={auditLogs}
             adminEmail={ADMIN_EMAIL}
+            tenants={tenants}
+            currentTenant={activeTenant}
+            isMasterAdmin={isMasterAdmin}
+            onSaveTenant={handleSaveTenant}
+            onDeleteTenant={handleDeleteTenant}
+            onGenerateTenantToken={handleGenerateTenantToken}
+            onSwitchTenant={handleSwitchTenant}
             onSaveOffice={handleSaveOfficeAdmin}
             onDeleteOffice={handleDeleteOfficeAdmin}
             onSaveRoom={handleSaveRoomAdmin}
@@ -1463,17 +1750,22 @@ export default function App() {
 
       ) : !activeOffice ? (
         
-        /* Employee Workspace Passkey Screen (Clean, no exposed testing passkeys) */
+        /* 3. Campus Selection or Passkey Screen */
         <div className="flex-1 flex items-center justify-center p-4">
           <div className="max-w-md w-full bg-white rounded-3xl border border-slate-200 shadow-xl p-8 space-y-6 text-center animate-in fade-in zoom-in-95 duration-200">
             
-            <div className="w-14 h-14 bg-indigo-600 rounded-2xl flex items-center justify-center text-white mx-auto shadow-md">
+            <div className={`w-14 h-14 rounded-2xl flex items-center justify-center text-white mx-auto shadow-md ${
+              activeTenant.themeColor === 'emerald' ? 'bg-emerald-600' :
+              activeTenant.themeColor === 'violet' ? 'bg-violet-600' :
+              activeTenant.themeColor === 'cyan' ? 'bg-cyan-600' :
+              'bg-indigo-600'
+            }`}>
               <Building2 className="w-7 h-7" />
             </div>
 
             <div className="space-y-1">
               <h2 className="text-xl font-bold font-sans tracking-tight text-slate-900">
-                Corporate Workspace Portal
+                {activeTenant.name} Campus Portal
               </h2>
               <p className="text-xs text-slate-500">
                 Select your building and enter your office passkey to access live room schedules.
@@ -1510,13 +1802,18 @@ export default function App() {
               </button>
             </form>
 
-            <div className="border-t border-slate-100 pt-4 text-center">
+            <div className="border-t border-slate-100 pt-4 flex items-center justify-between text-xs">
               <button
-                onClick={handleOpenAdminConsole}
-                className="text-[11px] text-slate-500 hover:text-indigo-600 font-bold transition-colors cursor-pointer flex items-center gap-1.5 mx-auto"
+                onClick={() => setIsTenantSwitcherOpen(true)}
+                className="text-[11px] text-slate-500 hover:text-indigo-600 font-bold transition-colors cursor-pointer"
               >
-                <ShieldCheck className="w-4 h-4 text-indigo-600" />
-                <span>Super Administrator Portal</span>
+                Switch Company
+              </button>
+              <button
+                onClick={handleLockTenant}
+                className="text-[11px] text-rose-500 hover:text-rose-700 font-bold transition-colors cursor-pointer"
+              >
+                Lock Workspace
               </button>
             </div>
 
@@ -1720,8 +2017,8 @@ export default function App() {
                       key={room.id}
                       room={room}
                       selectedDate={selectedDate}
-                      bookings={currentOfficeBookings.filter(b => b.roomId === room.id && b.date === selectedDate)}
-                      onBookClick={() => handleRoomBookClick(room)}
+                      bookings={currentOfficeBookings}
+                      onBookClick={(r, start, end) => handleRoomBookClick(r, start, end)}
                     />
                   ))}
                 </div>
@@ -1862,7 +2159,7 @@ export default function App() {
               initial={{ scale: 0.95, opacity: 0 }}
               animate={{ scale: 1, opacity: 1 }}
               exit={{ scale: 0.95, opacity: 0 }}
-              className="bg-white rounded-3xl border border-slate-200 shadow-2xl p-6 max-w-sm w-full space-y-5"
+              className="bg-white rounded-3xl border border-slate-200 shadow-2xl p-6 max-w-md w-full space-y-5"
             >
               <div className="flex items-start justify-between">
                 <div className="flex items-center gap-2">
@@ -1877,15 +2174,53 @@ export default function App() {
                 </button>
               </div>
 
-              <div className="space-y-2 text-xs text-slate-600 leading-relaxed font-sans">
+              <div className="space-y-3 text-xs text-slate-600 leading-relaxed font-sans">
                 <p>
-                  System administrative controls and configuration suite are strictly restricted to the authorized administrator:
+                  System administrative controls and configuration suite are strictly restricted based on administrative role tiers:
                 </p>
-                <div className="bg-amber-50 border border-amber-200 rounded-xl p-2.5 font-mono text-amber-900 font-bold text-center select-all">
-                  {ADMIN_EMAIL}
+
+                <div className="space-y-2">
+                  <div className="bg-amber-50 border border-amber-200 rounded-xl p-3">
+                    <div className="flex items-center gap-1.5 text-[11px] font-bold text-amber-900 uppercase">
+                      <span>👑 Master Platform Superadmin</span>
+                    </div>
+                    <div className="font-mono text-xs text-amber-900 font-bold mt-1 select-all">
+                      {ADMIN_EMAIL}
+                    </div>
+                    <p className="text-[10px] text-amber-700 mt-0.5">
+                      Full fleet control, tenant provisioning & focal assignment.
+                    </p>
+                  </div>
+
+                  {activeTenant && (
+                    <div className="bg-emerald-50 border border-emerald-200 rounded-xl p-3">
+                      <div className="flex items-center gap-1.5 text-[11px] font-bold text-emerald-900 uppercase">
+                        <span>🏢 {activeTenant.name} Focal Admins</span>
+                      </div>
+                      {activeTenant.focalAdminEmails && activeTenant.focalAdminEmails.length > 0 ? (
+                        <div className="mt-1 space-y-1">
+                          <div className="flex flex-wrap gap-1">
+                            {activeTenant.focalAdminEmails.map(focal => (
+                              <span key={focal} className="text-[10px] font-mono bg-white px-2 py-0.5 rounded border border-emerald-300 text-emerald-800 font-semibold">
+                                {focal}
+                              </span>
+                            ))}
+                          </div>
+                          <p className="text-[10px] text-emerald-700">
+                            Scoped to manage {activeTenant.name} campus, rooms & whitelist.
+                          </p>
+                        </div>
+                      ) : (
+                        <p className="text-[10px] text-emerald-700 mt-1">
+                          No focal admins assigned for {activeTenant.name} yet. Contact the master superadmin to assign your account.
+                        </p>
+                      )}
+                    </div>
+                  )}
                 </div>
+
                 <p className="text-[11px] text-slate-400 pt-1">
-                  Please sign in using your official Google Administrator account to access workspace management, staff whitelisting, and audit logs.
+                  Please sign in using an authorized account or contact <span className="font-mono font-semibold text-slate-600">{ADMIN_EMAIL}</span> to assign focal administrative privileges.
                 </p>
               </div>
 
@@ -1899,7 +2234,7 @@ export default function App() {
                   className="w-full bg-indigo-600 hover:bg-indigo-700 text-white font-extrabold text-xs uppercase py-2.5 rounded-xl transition-colors shadow-xs flex items-center justify-center gap-2 cursor-pointer"
                 >
                   <Shield className="w-3.5 h-3.5" />
-                  <span>Sign In as Administrator</span>
+                  <span>Sign In with Google</span>
                 </button>
                 <button
                   type="button"
@@ -1918,6 +2253,18 @@ export default function App() {
       <SimulatedInbox
         emails={simulatedEmails}
         onClear={() => setSimulatedEmails([])}
+      />
+
+      {/* Multi-Tenant Organization Switcher Modal */}
+      <TenantSwitcherModal
+        isOpen={isTenantSwitcherOpen}
+        onClose={() => setIsTenantSwitcherOpen(false)}
+        tenants={tenants}
+        currentTenant={activeTenant}
+        accessKeys={accessKeys}
+        isMasterAdmin={isMasterAdmin}
+        onSwitchTenant={handleSwitchTenant}
+        onLockTenant={handleLockTenant}
       />
 
     </div>

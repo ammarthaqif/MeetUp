@@ -1,10 +1,24 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { 
   X, Calendar, Clock, Info, UserCheck, AlertTriangle, Users, Mail, Plus, Trash2, 
-  Lock, ShieldCheck, ShieldAlert, Layers, Sparkles, ArrowRight, CheckCircle2 
+  Lock, ShieldCheck, ShieldAlert, Layers, Sparkles, ArrowRight, CheckCircle2,
+  Repeat, CalendarRange, Check, AlertCircle, RefreshCw, ChevronRight, Zap
 } from 'lucide-react';
 import { Room, Booking } from '../types';
-import { isRoomAvailable, timeToMinutes, minutesToTime } from '../utils';
+import { 
+  isRoomAvailable, 
+  timeToMinutes, 
+  minutesToTime, 
+  formatDateToISO, 
+  parseISODate, 
+  formatFriendlyDate,
+  generateRecurringDates,
+  getWeekdayOrdinalInfo,
+  RecurrenceFrequency,
+  RecurrenceConfig,
+  addMonthsToDate,
+  addDaysToDate
+} from '../utils';
 
 interface BookingModalProps {
   isOpen: boolean;
@@ -67,11 +81,16 @@ export const BookingModal: React.FC<BookingModalProps> = ({
     (currentUser?.email?.toLowerCase() === adminEmail.toLowerCase())
   );
 
-  // Multi-day states
-  const [isMultiDay, setIsMultiDay] = useState(false);
-  const [endDate, setEndDate] = useState('');
+  // -------------------------------------------------------------------------
+  // Rich Recurring Booking Engine States
+  // -------------------------------------------------------------------------
+  const [isRecurring, setIsRecurring] = useState(false);
+  const [recurrenceFreq, setRecurrenceFreq] = useState<RecurrenceFrequency>('WEEKLY');
   const [repeatDays, setRepeatDays] = useState<string[]>([]);
-  const [multiDayConflicts, setMultiDayConflicts] = useState<{ date: string; bookings: Booking[] }[]>([]);
+  const [endConditionType, setEndConditionType] = useState<'count' | 'until_date'>('count');
+  const [occurrencesCount, setOccurrencesCount] = useState<number>(4);
+  const [recurrenceEndDate, setRecurrenceEndDate] = useState<string>('');
+  const [includedDates, setIncludedDates] = useState<string[]>([]);
 
   const DAYS_OF_WEEK = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'];
 
@@ -91,15 +110,14 @@ export const BookingModal: React.FC<BookingModalProps> = ({
         setSyncGoogle(!!editingBooking.googleEventId);
         setErrorMessage('');
         
-        setIsMultiDay(false);
-        setEndDate(editingBooking.date);
+        setIsRecurring(false);
+        setRecurrenceEndDate(editingBooking.date);
         setRepeatDays([]);
-        setMultiDayConflicts([]);
+        setIncludedDates([editingBooking.date]);
       } else {
         setRoomId(room?.id || rooms[0]?.id || '');
         setDate(selectedDate);
         setStartTime(selectedHour);
-        // Default end time to selectedEndTime if provided, else 1 hour after start time
         if (selectedEndTime) {
           setEndTime(selectedEndTime);
         } else {
@@ -114,20 +132,111 @@ export const BookingModal: React.FC<BookingModalProps> = ({
         setSyncGoogle(googleSyncAvailable);
         setErrorMessage('');
 
-        setIsMultiDay(false);
-        setEndDate(selectedDate);
+        setIsRecurring(false);
+        setRecurrenceFreq('WEEKLY');
         const dayName = new Date(selectedDate).toLocaleDateString('en-US', { weekday: 'long' });
         setRepeatDays([dayName]);
-        setMultiDayConflicts([]);
+        setEndConditionType('count');
+        setOccurrencesCount(4);
+        setRecurrenceEndDate(addMonthsToDate(selectedDate, 1));
+        setIncludedDates([selectedDate]);
       }
     }
   }, [isOpen, room, selectedDate, selectedHour, selectedEndTime, editingBooking, currentUser, rooms, googleSyncAvailable]);
 
-  // Live conflict checking when dates, times, or rooms change
+  // Derived Ordinal info (e.g. 3rd Thursday)
+  const ordinalInfo = useMemo(() => {
+    if (!date) return { nth: 1, dayName: 'Thursday', label: '1st Day' };
+    return getWeekdayOrdinalInfo(date);
+  }, [date]);
+
+  // Generate All Dates for the Current Recurrence Config
+  const generatedSeriesDates = useMemo(() => {
+    if (!isRecurring || !date) return [date];
+    const config: RecurrenceConfig = {
+      startDate: date,
+      frequency: recurrenceFreq,
+      repeatDays: repeatDays.length > 0 ? repeatDays : [ordinalInfo.dayName],
+      endType: endConditionType,
+      occurrencesCount,
+      endDate: recurrenceEndDate,
+      maxGenerated: 52,
+    };
+    return generateRecurringDates(config);
+  }, [isRecurring, date, recurrenceFreq, repeatDays, endConditionType, occurrencesCount, recurrenceEndDate, ordinalInfo.dayName]);
+
+  // Sync includedDates when generated series changes
+  useEffect(() => {
+    if (isRecurring) {
+      setIncludedDates(generatedSeriesDates);
+    } else {
+      setIncludedDates([date]);
+    }
+  }, [isRecurring, generatedSeriesDates, date]);
+
+  // Map conflicts per date in the series
+  const seriesDateConflictMap = useMemo(() => {
+    const map = new Map<string, Booking[]>();
+    if (!roomId || !startTime || !endTime) return map;
+
+    const startMin = timeToMinutes(startTime);
+    const endMin = timeToMinutes(endTime);
+
+    for (const d of generatedSeriesDates) {
+      const collisions = bookings.filter(b => {
+        if (editingBooking && b.id === editingBooking.id) return false;
+        if (b.roomId !== roomId) return false;
+        if (b.date !== d) return false;
+        const bStart = timeToMinutes(b.startTime);
+        const bEnd = timeToMinutes(b.endTime);
+        return Math.max(startMin, bStart) < Math.min(endMin, bEnd);
+      });
+      if (collisions.length > 0) {
+        map.set(d, collisions);
+      }
+    }
+    return map;
+  }, [generatedSeriesDates, roomId, startTime, endTime, bookings, editingBooking]);
+
+  // Active included conflicts
+  const activeIncludedConflicts = useMemo(() => {
+    return includedDates.filter(d => seriesDateConflictMap.has(d));
+  }, [includedDates, seriesDateConflictMap]);
+
+  // Find Alternative Rooms that have full availability across the selected series dates
+  const seriesAlternativeRooms = useMemo(() => {
+    if (!isRecurring || includedDates.length === 0 || !startTime || !endTime) return [];
+    const currentRoomObj = rooms.find(r => r.id === roomId);
+    if (!currentRoomObj) return [];
+
+    const otherRooms = rooms.filter(r => r.id !== roomId);
+    const viableRooms: { room: Room; availableCount: number; conflictCount: number }[] = [];
+
+    for (const otherRoom of otherRooms) {
+      let availableCount = 0;
+      let conflictCount = 0;
+
+      for (const d of includedDates) {
+        const isFree = isRoomAvailable(otherRoom.id, d, startTime, endTime, bookings, editingBooking?.id);
+        if (isFree) {
+          availableCount++;
+        } else {
+          conflictCount++;
+        }
+      }
+
+      if (conflictCount === 0 || availableCount > (includedDates.length - activeIncludedConflicts.length)) {
+        viableRooms.push({ room: otherRoom, availableCount, conflictCount });
+      }
+    }
+
+    return viableRooms.sort((a, b) => a.conflictCount - b.conflictCount);
+  }, [isRecurring, includedDates, startTime, endTime, bookings, editingBooking, rooms, roomId, activeIncludedConflicts.length]);
+
+  // Live conflict checking
   useEffect(() => {
     if (!roomId || !date || !startTime || !endTime) return;
     
-    // Auto-validate end time is after start time
     const startMin = timeToMinutes(startTime);
     const endMin = timeToMinutes(endTime);
     if (endMin <= startMin) {
@@ -162,7 +271,6 @@ export const BookingModal: React.FC<BookingModalProps> = ({
         if (isFree) {
           alternativeRooms.push(fRoom);
         } else {
-          // Find the active booking in that room
           const overlappingB = bookings.find(b => {
             if (editingBooking && b.id === editingBooking.id) return false;
             if (b.roomId !== fRoom.id) return false;
@@ -181,41 +289,16 @@ export const BookingModal: React.FC<BookingModalProps> = ({
       setAlternativeAvailableRoomsOnFloor(alternativeRooms);
     }
 
-    if (isMultiDay && endDate && !editingBooking) {
-      const datesToCheck: string[] = [];
-      const start = new Date(date);
-      const end = new Date(endDate);
-      if (!isNaN(start.getTime()) && !isNaN(end.getTime()) && start <= end) {
-        const current = new Date(start);
-        while (current <= end) {
-          const dayName = current.toLocaleDateString('en-US', { weekday: 'long' });
-          if (repeatDays.includes(dayName)) {
-            datesToCheck.push(current.toISOString().split('T')[0]);
-          }
-          current.setDate(current.getDate() + 1);
-        }
+    if (isRecurring && !editingBooking) {
+      const hasConflictsInIncluded = activeIncludedConflicts.length > 0;
+      setIsConflict(hasConflictsInIncluded);
+      if (hasConflictsInIncluded) {
+        const firstConflictDate = activeIncludedConflicts[0];
+        setDirectCollisions(seriesDateConflictMap.get(firstConflictDate) || []);
+      } else {
+        setDirectCollisions([]);
       }
-
-      const multiConflicts: { date: string; bookings: Booking[] }[] = [];
-      for (const d of datesToCheck) {
-        const overlappingList = bookings.filter(b => {
-          if (editingBooking && b.id === editingBooking.id) return false;
-          if (b.roomId !== roomId) return false;
-          if (b.date !== d) return false;
-          const bStart = timeToMinutes(b.startTime);
-          const bEnd = timeToMinutes(b.endTime);
-          return Math.max(startMin, bStart) < Math.min(endMin, bEnd);
-        });
-
-        if (overlappingList.length > 0) {
-          multiConflicts.push({ date: d, bookings: overlappingList });
-        }
-      }
-      setMultiDayConflicts(multiConflicts);
-      setIsConflict(multiConflicts.length > 0);
-      setDirectCollisions(multiConflicts[0]?.bookings || []);
     } else {
-      // Find all overlapping bookings for this exact room
       const collisions = bookings.filter(b => {
         if (editingBooking && b.id === editingBooking.id) return false;
         if (b.roomId !== roomId) return false;
@@ -227,9 +310,8 @@ export const BookingModal: React.FC<BookingModalProps> = ({
 
       setDirectCollisions(collisions);
       setIsConflict(collisions.length > 0);
-      setMultiDayConflicts([]);
     }
-  }, [roomId, date, startTime, endTime, bookings, editingBooking, isMultiDay, endDate, repeatDays, rooms]);
+  }, [roomId, date, startTime, endTime, bookings, editingBooking, isRecurring, activeIncludedConflicts, seriesDateConflictMap, rooms]);
 
   if (!isOpen) return null;
 
@@ -262,9 +344,68 @@ export const BookingModal: React.FC<BookingModalProps> = ({
 
   const handleDayToggle = (day: string) => {
     if (repeatDays.includes(day)) {
-      setRepeatDays(repeatDays.filter(d => d !== day));
+      if (repeatDays.length > 1) {
+        setRepeatDays(repeatDays.filter(d => d !== day));
+      }
     } else {
       setRepeatDays([...repeatDays, day]);
+    }
+  };
+
+  const handleToggleDateInclusion = (dateStr: string) => {
+    if (includedDates.includes(dateStr)) {
+      setIncludedDates(includedDates.filter(d => d !== dateStr));
+    } else {
+      setIncludedDates([...includedDates, dateStr].sort());
+    }
+  };
+
+  const handleSelectOnlyAvailableDates = () => {
+    const cleanAvailable = generatedSeriesDates.filter(d => !seriesDateConflictMap.has(d));
+    setIncludedDates(cleanAvailable);
+  };
+
+  const handleSelectAllDates = () => {
+    setIncludedDates(generatedSeriesDates);
+  };
+
+  // Quick Recurrence Preset Handlers
+  const applyPreset = (preset: 'WEEKDAYS_1W' | 'WEEKLY_4W' | 'WEEKLY_12W' | 'BIWEEKLY_6S' | 'MONTHLY_6M' | 'MONTHLY_12M') => {
+    setIsRecurring(true);
+    switch (preset) {
+      case 'WEEKDAYS_1W':
+        setRecurrenceFreq('WEEKDAYS');
+        setEndConditionType('count');
+        setOccurrencesCount(5);
+        break;
+      case 'WEEKLY_4W':
+        setRecurrenceFreq('WEEKLY');
+        setRepeatDays([ordinalInfo.dayName]);
+        setEndConditionType('count');
+        setOccurrencesCount(4);
+        break;
+      case 'WEEKLY_12W':
+        setRecurrenceFreq('WEEKLY');
+        setRepeatDays([ordinalInfo.dayName]);
+        setEndConditionType('count');
+        setOccurrencesCount(12);
+        break;
+      case 'BIWEEKLY_6S':
+        setRecurrenceFreq('BIWEEKLY');
+        setRepeatDays([ordinalInfo.dayName]);
+        setEndConditionType('count');
+        setOccurrencesCount(6);
+        break;
+      case 'MONTHLY_6M':
+        setRecurrenceFreq('MONTHLY_DATE');
+        setEndConditionType('count');
+        setOccurrencesCount(6);
+        break;
+      case 'MONTHLY_12M':
+        setRecurrenceFreq('MONTHLY_DATE');
+        setEndConditionType('count');
+        setOccurrencesCount(12);
+        break;
     }
   };
 
@@ -291,42 +432,21 @@ export const BookingModal: React.FC<BookingModalProps> = ({
     let confirmMessage = `Are you sure you want to ${editingBooking ? 'update this booking' : 'create this booking'} in ${currentRoom?.name} on ${date} from ${startTime} to ${endTime}?`;
     let multiDates: string[] | undefined = undefined;
 
-    if (isMultiDay && !editingBooking) {
-      const start = new Date(date);
-      const end = new Date(endDate);
-      const datesToBook: string[] = [];
-      if (!isNaN(start.getTime()) && !isNaN(end.getTime()) && start <= end) {
-        const current = new Date(start);
-        while (current <= end) {
-          const dayName = current.toLocaleDateString('en-US', { weekday: 'long' });
-          if (repeatDays.includes(dayName)) {
-            datesToBook.push(current.toISOString().split('T')[0]);
-          }
-          current.setDate(current.getDate() + 1);
-        }
-      }
-      
-      if (datesToBook.length === 0) {
-        setErrorMessage('No valid days of the week found in the selected date range.');
+    if (isRecurring && !editingBooking) {
+      if (includedDates.length === 0) {
+        setErrorMessage('Please select at least 1 date to book in this recurring series.');
         return;
       }
 
-      // Check conflicts
-      const conflicts: string[] = [];
-      for (const d of datesToBook) {
-        const available = isRoomAvailable(roomId, d, startTime, endTime, bookings);
-        if (!available) {
-          conflicts.push(d);
-        }
-      }
-
-      if (conflicts.length > 0) {
-        setErrorMessage(`Conflict detected on the following dates: ${conflicts.join(', ')}. Please adjust your schedule.`);
+      // Check conflicts among included dates
+      const conflictingSelected = includedDates.filter(d => seriesDateConflictMap.has(d));
+      if (conflictingSelected.length > 0) {
+        setErrorMessage(`Conflict detected on ${conflictingSelected.length} selected date(s): ${conflictingSelected.join(', ')}. Click "Select Only Available" to book open dates or switch room.`);
         return;
       }
 
-      multiDates = datesToBook;
-      confirmMessage = `Are you sure you want to book ${currentRoom?.name} for ${startTime} - ${endTime} on ${datesToBook.length} selected days (${date} to ${endDate})?`;
+      multiDates = includedDates;
+      confirmMessage = `Are you sure you want to book "${title.trim()}" in ${currentRoom?.name} for ${startTime} - ${endTime} across ${includedDates.length} recurring dates (${includedDates[0]} to ${includedDates[includedDates.length - 1]})?`;
     } else {
       // Single day check
       const available = isRoomAvailable(
@@ -378,16 +498,23 @@ export const BookingModal: React.FC<BookingModalProps> = ({
 
   return (
     <div className="fixed inset-0 z-50 overflow-y-auto bg-slate-900/60 backdrop-blur-sm flex items-center justify-center p-4">
-      <div className="bg-white rounded-3xl w-full max-w-xl shadow-xl border border-slate-100 overflow-hidden flex flex-col max-h-[90vh]">
+      <div className="bg-white rounded-3xl w-full max-w-2xl shadow-2xl border border-slate-100 overflow-hidden flex flex-col max-h-[92vh]">
         
-        {/* Header */}
+        {/* Modal Header */}
         <div className="bg-slate-50 border-b border-slate-100 px-6 py-5 flex items-center justify-between">
           <div>
             <h3 className="font-sans font-bold text-slate-950 text-lg flex items-center gap-2">
               {editingBooking ? (
                 isOwner ? 'Edit Meeting Room Reservation' : 'Meeting Reservation Details'
               ) : (
-                'Book a Meeting Room'
+                <>
+                  <span>Book a Meeting Room</span>
+                  {isRecurring && (
+                    <span className="text-[10px] bg-indigo-100 text-indigo-800 font-mono px-2 py-0.5 rounded-full font-bold uppercase flex items-center gap-1">
+                      <Repeat className="w-3 h-3" /> Recurring Series ({includedDates.length} Days)
+                    </span>
+                  )}
+                </>
               )}
               {editingBooking && !isOwner && (
                 <span className="text-[10px] bg-slate-200 text-slate-700 font-mono px-2 py-0.5 rounded font-bold uppercase flex items-center gap-1">
@@ -398,13 +525,13 @@ export const BookingModal: React.FC<BookingModalProps> = ({
             <p className="text-xs text-slate-500 font-sans mt-0.5">
               {editingBooking && !isOwner 
                 ? `Reserved by ${editingBooking.hostName || 'Team Member'}`
-                : 'Secure real-time floor availability sync.'
+                : 'Schedule single or recurring meetings across days, weeks, and months.'
               }
             </p>
           </div>
           <button
             onClick={onClose}
-            className="p-1.5 rounded-full hover:bg-slate-200 text-slate-400 hover:text-slate-600 transition-colors"
+            className="p-1.5 rounded-full hover:bg-slate-200 text-slate-400 hover:text-slate-600 transition-colors cursor-pointer"
           >
             <X className="w-5 h-5" />
           </button>
@@ -431,8 +558,8 @@ export const BookingModal: React.FC<BookingModalProps> = ({
             </div>
           )}
 
-          {/* VISUAL OVERLAP & CONFLICT WARNING SYSTEM */}
-          {isConflict && !isMultiDay && directCollisions.length > 0 && (
+          {/* VISUAL OVERLAP & CONFLICT WARNING SYSTEM (Single-day mode) */}
+          {isConflict && !isRecurring && directCollisions.length > 0 && (
             <div className="p-4 bg-gradient-to-br from-rose-50 to-amber-50 border-2 border-rose-300/80 text-rose-950 rounded-2xl shadow-xs space-y-3 animate-in fade-in zoom-in-95 duration-200">
               <div className="flex items-start justify-between gap-2">
                 <div className="flex items-center gap-2">
@@ -485,9 +612,7 @@ export const BookingModal: React.FC<BookingModalProps> = ({
                       <button
                         type="button"
                         key={altRoom.id}
-                        onClick={() => {
-                          setRoomId(altRoom.id);
-                        }}
+                        onClick={() => setRoomId(altRoom.id)}
                         className="px-2.5 py-1 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg text-xs font-bold transition-all shadow-2xs cursor-pointer flex items-center gap-1"
                       >
                         <CheckCircle2 className="w-3 h-3" />
@@ -501,47 +626,7 @@ export const BookingModal: React.FC<BookingModalProps> = ({
             </div>
           )}
 
-          {/* Multi-Day Recurrence Conflict Warning */}
-          {isConflict && isMultiDay && multiDayConflicts.length > 0 && (
-            <div className="p-4 bg-gradient-to-br from-rose-50 to-amber-50 border-2 border-rose-300 text-rose-950 rounded-2xl shadow-xs space-y-2.5 animate-in fade-in zoom-in-95 duration-200">
-              <div className="flex items-center justify-between">
-                <div className="flex items-center gap-2 font-bold text-xs text-rose-900 font-mono uppercase">
-                  <AlertTriangle className="w-4 h-4 text-rose-600 shrink-0" />
-                  <span>Recurring Multi-Day Conflicts ({multiDayConflicts.length} dates)</span>
-                </div>
-              </div>
-              <p className="text-[11px] text-rose-800 leading-relaxed">
-                This space is already occupied for the requested time slot on the following dates:
-              </p>
-              <div className="flex flex-wrap gap-1.5 pt-1">
-                {multiDayConflicts.map((c) => (
-                  <span 
-                    key={c.date} 
-                    className="text-[11px] bg-rose-200/90 text-rose-900 border border-rose-300 px-2 py-0.5 rounded-md font-mono font-bold"
-                  >
-                    {c.date} ({c.bookings[0]?.startTime} - {c.bookings[0]?.endTime})
-                  </span>
-                ))}
-              </div>
-            </div>
-          )}
-
-          {/* Same-Floor Concurrent Booking Awareness Badge (When no direct collision on this room) */}
-          {!isConflict && floorConcurrentBookings.length > 0 && (
-            <div className="p-2.5 bg-slate-50 border border-slate-200 rounded-xl flex items-center justify-between text-xs text-slate-600">
-              <div className="flex items-center gap-2">
-                <Layers className="w-3.5 h-3.5 text-indigo-500 shrink-0" />
-                <span className="text-[11px]">
-                  <strong>Floor {currentRoom?.floor} Activity:</strong> {floorConcurrentBookings.length} other {floorConcurrentBookings.length === 1 ? 'room is' : 'rooms are'} booked during this time ({floorConcurrentBookings.map(f => f.room.name).join(', ')})
-                </span>
-              </div>
-              <span className="text-[10px] font-bold text-emerald-600 bg-emerald-50 border border-emerald-200 px-2 py-0.5 rounded-full shrink-0">
-                This Room is Free
-              </span>
-            </div>
-          )}
-
-          {/* Room Selection and Start Date */}
+          {/* Room Selection and Base Date */}
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <div>
               <label className="block text-xs font-bold text-slate-600 uppercase tracking-wider mb-2 font-mono">
@@ -550,7 +635,7 @@ export const BookingModal: React.FC<BookingModalProps> = ({
               <select
                 value={roomId}
                 onChange={(e) => setRoomId(e.target.value)}
-                className="w-full border border-slate-200 rounded-xl px-3 py-2 text-sm text-slate-800 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 bg-white"
+                className="w-full border border-slate-200 rounded-xl px-3 py-2 text-sm text-slate-800 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 bg-white cursor-pointer"
               >
                 {rooms.map(r => (
                   <option key={r.id} value={r.id}>
@@ -560,90 +645,26 @@ export const BookingModal: React.FC<BookingModalProps> = ({
               </select>
             </div>
 
-            {/* Date Picker */}
+            {/* Base Date Picker */}
             <div>
               <label className="block text-xs font-bold text-slate-600 uppercase tracking-wider mb-2 font-mono">
-                {isMultiDay ? 'Start Date' : 'Date'}
+                {isRecurring ? 'First Session Date (Start Date)' : 'Date'}
               </label>
               <div className="relative">
                 <Calendar className="w-4 h-4 text-slate-400 absolute left-3 top-3" />
                 <input
                   type="date"
                   value={date}
-                  onChange={(e) => setDate(e.target.value)}
+                  onChange={(e) => {
+                    setDate(e.target.value);
+                    const newDay = new Date(e.target.value).toLocaleDateString('en-US', { weekday: 'long' });
+                    setRepeatDays([newDay]);
+                  }}
                   className="w-full border border-slate-200 rounded-xl pl-10 pr-3 py-2 text-sm text-slate-800 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 bg-white"
                 />
               </div>
             </div>
           </div>
-
-          {/* Multi-Day Option Toggle */}
-          {!editingBooking && (
-            <div className="p-3 bg-indigo-50/50 border border-indigo-100 rounded-xl space-y-3">
-              <div className="flex items-center gap-2">
-                <input
-                  type="checkbox"
-                  id="multi-day-toggle"
-                  checked={isMultiDay}
-                  onChange={(e) => {
-                    setIsMultiDay(e.target.checked);
-                    if (e.target.checked && !endDate) {
-                      setEndDate(date);
-                    }
-                  }}
-                  className="rounded border-slate-300 text-indigo-600 focus:ring-indigo-500 h-4 w-4 cursor-pointer"
-                />
-                <label htmlFor="multi-day-toggle" className="text-xs font-bold text-indigo-950 cursor-pointer select-none">
-                  Book across multiple days (Recurring Meeting)
-                </label>
-              </div>
-
-              {isMultiDay && (
-                <div className="pt-2 border-t border-indigo-100/60 space-y-3 animate-fadeIn">
-                  <div>
-                    <label className="block text-[10px] font-bold text-slate-500 uppercase tracking-wider mb-1.5 font-mono">
-                      End Date
-                    </label>
-                    <div className="relative">
-                      <Calendar className="w-4 h-4 text-slate-400 absolute left-3 top-2.5" />
-                      <input
-                        type="date"
-                        value={endDate}
-                        min={date}
-                        onChange={(e) => setEndDate(e.target.value)}
-                        className="w-full border border-slate-200 rounded-xl pl-10 pr-3 py-1.5 text-xs text-slate-800 focus:outline-none focus:ring-2 focus:ring-indigo-500 bg-white"
-                      />
-                    </div>
-                  </div>
-
-                  <div>
-                    <label className="block text-[10px] font-bold text-slate-500 uppercase tracking-wider mb-1.5 font-mono">
-                      Repeat on Days of the Week
-                    </label>
-                    <div className="flex flex-wrap gap-1.5">
-                      {DAYS_OF_WEEK.map(day => {
-                        const isSelected = repeatDays.includes(day);
-                        return (
-                          <button
-                            type="button"
-                            key={day}
-                            onClick={() => handleDayToggle(day)}
-                            className={`text-[10px] font-bold px-2 py-1 rounded transition-all cursor-pointer border ${
-                              isSelected
-                                ? 'bg-indigo-600 text-white border-indigo-700 font-black'
-                                : 'bg-white text-slate-600 border-slate-200 hover:border-slate-300'
-                            }`}
-                          >
-                            {day.substring(0, 3)}
-                          </button>
-                        );
-                      })}
-                    </div>
-                  </div>
-                </div>
-              )}
-            </div>
-          )}
 
           {/* Times Selection */}
           <div className="grid grid-cols-2 gap-4">
@@ -680,6 +701,433 @@ export const BookingModal: React.FC<BookingModalProps> = ({
             </div>
           </div>
 
+          {/* ========================================================================= */}
+          {/* RECURRING BOOKING SERIES ENGINE (Days / Weeks / Months) */}
+          {/* ========================================================================= */}
+          {!editingBooking && (
+            <div className="bg-gradient-to-b from-indigo-50/70 to-slate-50 border border-indigo-100 rounded-2xl p-4 space-y-4 shadow-2xs">
+              
+              {/* Header Toggle with Badge */}
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-2.5">
+                  <div className={`p-2 rounded-xl transition-colors ${isRecurring ? 'bg-indigo-600 text-white' : 'bg-slate-200 text-slate-600'}`}>
+                    <Repeat className="w-4 h-4" />
+                  </div>
+                  <div>
+                    <h4 className="text-xs font-black text-slate-900 tracking-tight font-sans">
+                      Repeat this meeting (Recurring Series)
+                    </h4>
+                    <p className="text-[10px] text-slate-500 font-sans">
+                      Book the same time slot across multiple days, weeks, or months with live conflict resolution.
+                    </p>
+                  </div>
+                </div>
+
+                <label className="relative inline-flex items-center cursor-pointer">
+                  <input
+                    type="checkbox"
+                    id="recurring-series-toggle"
+                    checked={isRecurring}
+                    onChange={(e) => setIsRecurring(e.target.checked)}
+                    className="sr-only peer"
+                  />
+                  <div className="w-10 h-5.5 bg-slate-300 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-slate-300 after:border after:rounded-full after:h-4.5 after:w-4.5 after:transition-all peer-checked:bg-indigo-600"></div>
+                </label>
+              </div>
+
+              {/* RECURRENCE BUILDER PANEL */}
+              {isRecurring && (
+                <div className="pt-3 border-t border-indigo-100 space-y-4 animate-in fade-in zoom-in-95 duration-150">
+                  
+                  {/* 1-Click Quick Presets */}
+                  <div>
+                    <div className="flex items-center gap-1 text-[10px] font-bold text-slate-500 uppercase tracking-wider font-mono mb-2">
+                      <Zap className="w-3 h-3 text-amber-500" />
+                      <span>Quick Presets</span>
+                    </div>
+                    <div className="grid grid-cols-2 sm:grid-cols-3 gap-1.5">
+                      <button
+                        type="button"
+                        onClick={() => applyPreset('WEEKDAYS_1W')}
+                        className="p-1.5 text-[10px] font-bold rounded-lg border border-indigo-200 bg-white/90 hover:bg-indigo-50 text-indigo-900 transition-all text-left truncate cursor-pointer shadow-2xs"
+                      >
+                        ⚡ Mon–Fri (5 days)
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => applyPreset('WEEKLY_4W')}
+                        className="p-1.5 text-[10px] font-bold rounded-lg border border-indigo-200 bg-white/90 hover:bg-indigo-50 text-indigo-900 transition-all text-left truncate cursor-pointer shadow-2xs"
+                      >
+                        ⚡ Weekly (4 Weeks / 1 Mo)
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => applyPreset('WEEKLY_12W')}
+                        className="p-1.5 text-[10px] font-bold rounded-lg border border-indigo-200 bg-white/90 hover:bg-indigo-50 text-indigo-900 transition-all text-left truncate cursor-pointer shadow-2xs"
+                      >
+                        ⚡ Weekly (12 Weeks / 3 Mo)
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => applyPreset('BIWEEKLY_6S')}
+                        className="p-1.5 text-[10px] font-bold rounded-lg border border-indigo-200 bg-white/90 hover:bg-indigo-50 text-indigo-900 transition-all text-left truncate cursor-pointer shadow-2xs"
+                      >
+                        ⚡ Every 2 Weeks (6 Ssn)
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => applyPreset('MONTHLY_6M')}
+                        className="p-1.5 text-[10px] font-bold rounded-lg border border-indigo-200 bg-white/90 hover:bg-indigo-50 text-indigo-900 transition-all text-left truncate cursor-pointer shadow-2xs"
+                      >
+                        ⚡ Monthly (6 Months)
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => applyPreset('MONTHLY_12M')}
+                        className="p-1.5 text-[10px] font-bold rounded-lg border border-indigo-200 bg-white/90 hover:bg-indigo-50 text-indigo-900 transition-all text-left truncate cursor-pointer shadow-2xs"
+                      >
+                        ⚡ Monthly (12 Months / 1 Yr)
+                      </button>
+                    </div>
+                  </div>
+
+                  {/* Frequency Tabs */}
+                  <div>
+                    <label className="block text-[10px] font-bold text-slate-500 uppercase tracking-wider mb-1.5 font-mono">
+                      Repeat Frequency
+                    </label>
+                    <div className="grid grid-cols-2 sm:grid-cols-4 gap-1.5 bg-slate-200/60 p-1 rounded-xl">
+                      <button
+                        type="button"
+                        onClick={() => setRecurrenceFreq('WEEKDAYS')}
+                        className={`py-1.5 px-2 text-[11px] font-bold rounded-lg transition-all cursor-pointer text-center ${
+                          recurrenceFreq === 'WEEKDAYS'
+                            ? 'bg-white text-indigo-700 shadow-xs font-black'
+                            : 'text-slate-600 hover:text-slate-900'
+                        }`}
+                      >
+                        Every Weekday
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setRecurrenceFreq('WEEKLY')}
+                        className={`py-1.5 px-2 text-[11px] font-bold rounded-lg transition-all cursor-pointer text-center ${
+                          recurrenceFreq === 'WEEKLY'
+                            ? 'bg-white text-indigo-700 shadow-xs font-black'
+                            : 'text-slate-600 hover:text-slate-900'
+                        }`}
+                      >
+                        Weekly
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setRecurrenceFreq('BIWEEKLY')}
+                        className={`py-1.5 px-2 text-[11px] font-bold rounded-lg transition-all cursor-pointer text-center ${
+                          recurrenceFreq === 'BIWEEKLY'
+                            ? 'bg-white text-indigo-700 shadow-xs font-black'
+                            : 'text-slate-600 hover:text-slate-900'
+                        }`}
+                      >
+                        Every 2 Weeks
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setRecurrenceFreq('MONTHLY_DATE')}
+                        className={`py-1.5 px-2 text-[11px] font-bold rounded-lg transition-all cursor-pointer text-center ${
+                          recurrenceFreq === 'MONTHLY_DATE' || recurrenceFreq === 'MONTHLY_DAY'
+                            ? 'bg-white text-indigo-700 shadow-xs font-black'
+                            : 'text-slate-600 hover:text-slate-900'
+                        }`}
+                      >
+                        Monthly
+                      </button>
+                    </div>
+                  </div>
+
+                  {/* Monthly Sub-Options */}
+                  {(recurrenceFreq === 'MONTHLY_DATE' || recurrenceFreq === 'MONTHLY_DAY') && (
+                    <div className="bg-white/80 p-2.5 rounded-xl border border-indigo-100 flex items-center gap-3">
+                      <span className="text-[10px] font-bold text-slate-500 uppercase font-mono">Monthly Rule:</span>
+                      <div className="flex items-center gap-4 text-xs">
+                        <label className="flex items-center gap-1.5 cursor-pointer text-slate-800">
+                          <input
+                            type="radio"
+                            name="monthly_type"
+                            checked={recurrenceFreq === 'MONTHLY_DATE'}
+                            onChange={() => setRecurrenceFreq('MONTHLY_DATE')}
+                            className="text-indigo-600 focus:ring-indigo-500"
+                          />
+                          <span>Same day of month (<strong>{date ? parseISODate(date).getDate() : '20'}th</strong> of each month)</span>
+                        </label>
+                        <label className="flex items-center gap-1.5 cursor-pointer text-slate-800">
+                          <input
+                            type="radio"
+                            name="monthly_type"
+                            checked={recurrenceFreq === 'MONTHLY_DAY'}
+                            onChange={() => setRecurrenceFreq('MONTHLY_DAY')}
+                            className="text-indigo-600 focus:ring-indigo-500"
+                          />
+                          <span>Relative day (<strong>{ordinalInfo.label}</strong> of each month)</span>
+                        </label>
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Days of the Week Selection (for Weekly, Bi-weekly, Custom) */}
+                  {(recurrenceFreq === 'WEEKLY' || recurrenceFreq === 'BIWEEKLY' || recurrenceFreq === 'CUSTOM_DAYS') && (
+                    <div>
+                      <label className="block text-[10px] font-bold text-slate-500 uppercase tracking-wider mb-1.5 font-mono">
+                        Repeat on Days of the Week
+                      </label>
+                      <div className="flex flex-wrap gap-1.5">
+                        {DAYS_OF_WEEK.map(day => {
+                          const isSelected = repeatDays.includes(day);
+                          return (
+                            <button
+                              type="button"
+                              key={day}
+                              onClick={() => handleDayToggle(day)}
+                              className={`text-xs font-bold px-3 py-1.5 rounded-xl transition-all cursor-pointer border ${
+                                isSelected
+                                  ? 'bg-indigo-600 text-white border-indigo-700 shadow-2xs font-black'
+                                  : 'bg-white text-slate-600 border-slate-200 hover:border-slate-300'
+                              }`}
+                            >
+                              {day.substring(0, 3)}
+                            </button>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  )}
+
+                  {/* End Condition Controls: Occurrences Count vs End Date */}
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 bg-white/90 p-3 rounded-xl border border-indigo-100">
+                    <div>
+                      <label className="flex items-center gap-2 cursor-pointer mb-2">
+                        <input
+                          type="radio"
+                          name="end_condition"
+                          checked={endConditionType === 'count'}
+                          onChange={() => setEndConditionType('count')}
+                          className="text-indigo-600 focus:ring-indigo-500"
+                        />
+                        <span className="text-xs font-bold text-slate-800">End after Number of Sessions:</span>
+                      </label>
+                      <div className="flex items-center gap-2">
+                        <input
+                          type="number"
+                          min={2}
+                          max={52}
+                          disabled={endConditionType !== 'count'}
+                          value={occurrencesCount}
+                          onChange={(e) => setOccurrencesCount(Math.max(2, Math.min(52, parseInt(e.target.value) || 2)))}
+                          className="w-20 border border-slate-200 rounded-lg px-2.5 py-1.5 text-xs text-slate-800 bg-white disabled:bg-slate-100 font-bold text-center"
+                        />
+                        <div className="flex gap-1">
+                          {[4, 8, 12, 24].map(n => (
+                            <button
+                              type="button"
+                              key={n}
+                              onClick={() => {
+                                setEndConditionType('count');
+                                setOccurrencesCount(n);
+                              }}
+                              className={`text-[10px] font-bold px-2 py-1 rounded border transition-all cursor-pointer ${
+                                endConditionType === 'count' && occurrencesCount === n
+                                  ? 'bg-indigo-100 border-indigo-300 text-indigo-900 font-black'
+                                  : 'bg-slate-50 border-slate-200 text-slate-600 hover:bg-slate-100'
+                              }`}
+                            >
+                              {n}x
+                            </button>
+                          ))}
+                        </div>
+                      </div>
+                    </div>
+
+                    <div>
+                      <label className="flex items-center gap-2 cursor-pointer mb-2">
+                        <input
+                          type="radio"
+                          name="end_condition"
+                          checked={endConditionType === 'until_date'}
+                          onChange={() => setEndConditionType('until_date')}
+                          className="text-indigo-600 focus:ring-indigo-500"
+                        />
+                        <span className="text-xs font-bold text-slate-800">End by Specific Date:</span>
+                      </label>
+                      <div className="relative">
+                        <Calendar className="w-3.5 h-3.5 text-slate-400 absolute left-2.5 top-2.5" />
+                        <input
+                          type="date"
+                          min={date}
+                          disabled={endConditionType !== 'until_date'}
+                          value={recurrenceEndDate || addMonthsToDate(date, 3)}
+                          onChange={(e) => setRecurrenceEndDate(e.target.value)}
+                          className="w-full border border-slate-200 rounded-lg pl-8 pr-2 py-1.5 text-xs text-slate-800 bg-white disabled:bg-slate-100"
+                        />
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* ========================================================================= */}
+                  {/* GENERATED SERIES DATES & CONFLICT MATRIX PREVIEW */}
+                  {/* ========================================================================= */}
+                  <div className="bg-slate-900 text-white rounded-2xl p-4 space-y-3 shadow-md">
+                    
+                    {/* Header Summary & Smart Action */}
+                    <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-800 pb-2.5">
+                      <div>
+                        <div className="flex items-center gap-2">
+                          <CalendarRange className="w-4 h-4 text-indigo-400" />
+                          <span className="text-xs font-extrabold text-white">
+                            Generated Recurring Schedule ({includedDates.length} of {generatedSeriesDates.length} Selected)
+                          </span>
+                        </div>
+                        <p className="text-[10px] text-slate-400 mt-0.5">
+                          {activeIncludedConflicts.length === 0 ? (
+                            <span className="text-emerald-400 font-bold flex items-center gap-1">
+                              <Check className="w-3 h-3" /> All {includedDates.length} selected sessions are 100% available!
+                            </span>
+                          ) : (
+                            <span className="text-rose-400 font-bold flex items-center gap-1">
+                              <AlertCircle className="w-3 h-3" /> {activeIncludedConflicts.length} of {includedDates.length} selected sessions have booking conflicts!
+                            </span>
+                          )}
+                        </p>
+                      </div>
+
+                      {/* Smart Filter Buttons */}
+                      <div className="flex items-center gap-1.5">
+                        {activeIncludedConflicts.length > 0 && (
+                          <button
+                            type="button"
+                            onClick={handleSelectOnlyAvailableDates}
+                            className="px-2.5 py-1 bg-emerald-600 hover:bg-emerald-500 text-white text-[10px] font-bold rounded-lg transition-all cursor-pointer flex items-center gap-1 shadow-xs"
+                          >
+                            <CheckCircle2 className="w-3 h-3" />
+                            <span>Select Only Available ({generatedSeriesDates.length - seriesDateConflictMap.size})</span>
+                          </button>
+                        )}
+                        <button
+                          type="button"
+                          onClick={handleSelectAllDates}
+                          className="px-2 py-1 bg-slate-800 hover:bg-slate-700 text-slate-300 text-[10px] font-bold rounded-lg transition-all cursor-pointer"
+                        >
+                          Select All
+                        </button>
+                      </div>
+                    </div>
+
+                    {/* Interactive Scrollable Occurrence Dates Grid */}
+                    <div className="max-h-40 overflow-y-auto pr-1 space-y-1.5 custom-scrollbar">
+                      {generatedSeriesDates.map((dStr, idx) => {
+                        const isIncluded = includedDates.includes(dStr);
+                        const conflicts = seriesDateConflictMap.get(dStr);
+                        const hasConflict = !!conflicts && conflicts.length > 0;
+
+                        return (
+                          <div
+                            key={dStr}
+                            onClick={() => handleToggleDateInclusion(dStr)}
+                            className={`p-2 rounded-xl border text-xs flex items-center justify-between transition-all cursor-pointer select-none ${
+                              !isIncluded 
+                                ? 'bg-slate-800/40 border-slate-800 text-slate-500 opacity-60'
+                                : hasConflict
+                                  ? 'bg-rose-950/40 border-rose-800/80 text-rose-200'
+                                  : 'bg-slate-800/80 border-slate-700 text-slate-200 hover:border-slate-600'
+                            }`}
+                          >
+                            <div className="flex items-center gap-2">
+                              <input
+                                type="checkbox"
+                                checked={isIncluded}
+                                onChange={() => handleToggleDateInclusion(dStr)}
+                                className="rounded text-indigo-500 focus:ring-indigo-400 h-3.5 w-3.5 cursor-pointer"
+                                onClick={(e) => e.stopPropagation()}
+                              />
+                              <span className="text-[10px] font-mono text-slate-400 font-bold">
+                                #{idx + 1}
+                              </span>
+                              <span className="font-bold font-sans">
+                                {formatFriendlyDate(dStr)}
+                              </span>
+                              <span className="text-[10px] font-mono text-slate-400">
+                                ({dStr})
+                              </span>
+                            </div>
+
+                            <div className="flex items-center gap-2">
+                              {hasConflict ? (
+                                <div className="text-right">
+                                  <span className="inline-flex items-center gap-1 text-[9px] font-bold uppercase bg-rose-500/20 text-rose-300 border border-rose-500/40 px-2 py-0.5 rounded-md">
+                                    <AlertTriangle className="w-2.5 h-2.5" />
+                                    <span>Conflict ({conflicts[0]?.startTime}-{conflicts[0]?.endTime})</span>
+                                  </span>
+                                  <div className="text-[9px] text-rose-300/80 truncate max-w-[140px]">
+                                    {conflicts[0]?.title || 'Reserved'}
+                                  </div>
+                                </div>
+                              ) : (
+                                <span className="inline-flex items-center gap-1 text-[9px] font-bold uppercase bg-emerald-500/20 text-emerald-300 border border-emerald-500/40 px-2 py-0.5 rounded-md">
+                                  <Check className="w-2.5 h-2.5" /> Free Slot
+                                </span>
+                              )}
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+
+                    {/* Series Conflict Alternatives */}
+                    {activeIncludedConflicts.length > 0 && seriesAlternativeRooms.length > 0 && (
+                      <div className="pt-2 border-t border-slate-800">
+                        <span className="text-[10px] font-bold uppercase tracking-wider text-amber-400 font-mono flex items-center gap-1 mb-1.5">
+                          <Sparkles className="w-3 h-3 text-amber-400" />
+                          Recommended Rooms with Higher Availability for this Series:
+                        </span>
+                        <div className="flex flex-wrap gap-1.5">
+                          {seriesAlternativeRooms.slice(0, 3).map(({ room: altR, availableCount, conflictCount }) => (
+                            <button
+                              type="button"
+                              key={altR.id}
+                              onClick={() => setRoomId(altR.id)}
+                              className="px-2.5 py-1 bg-indigo-600/80 hover:bg-indigo-600 text-white rounded-lg text-xs font-bold transition-all cursor-pointer flex items-center gap-1.5 border border-indigo-400/30"
+                            >
+                              <span>Switch to {altR.name} (Lvl {altR.floor})</span>
+                              <span className="text-[10px] text-indigo-200 font-mono font-normal">
+                                [{conflictCount === 0 ? '100% Free' : `${availableCount}/${includedDates.length} Free`}]
+                              </span>
+                            </button>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+
+                  </div>
+
+                </div>
+              )}
+
+            </div>
+          )}
+
+          {/* Same-Floor Concurrent Booking Awareness Badge */}
+          {!isConflict && !isRecurring && floorConcurrentBookings.length > 0 && (
+            <div className="p-2.5 bg-slate-50 border border-slate-200 rounded-xl flex items-center justify-between text-xs text-slate-600">
+              <div className="flex items-center gap-2">
+                <Layers className="w-3.5 h-3.5 text-indigo-500 shrink-0" />
+                <span className="text-[11px]">
+                  <strong>Floor {currentRoom?.floor} Activity:</strong> {floorConcurrentBookings.length} other {floorConcurrentBookings.length === 1 ? 'room is' : 'rooms are'} booked during this time ({floorConcurrentBookings.map(f => f.room.name).join(', ')})
+                </span>
+              </div>
+              <span className="text-[10px] font-bold text-emerald-600 bg-emerald-50 border border-emerald-200 px-2 py-0.5 rounded-full shrink-0">
+                This Room is Free
+              </span>
+            </div>
+          )}
+
           {/* Meeting Details */}
           <div>
             <label className="block text-xs font-bold text-slate-600 uppercase tracking-wider mb-2 font-mono">
@@ -689,7 +1137,7 @@ export const BookingModal: React.FC<BookingModalProps> = ({
               type="text"
               value={title}
               onChange={(e) => setTitle(e.target.value)}
-              placeholder="e.g. Design Review / Weekly Sync"
+              placeholder="e.g. Weekly Product Sync / Sprint Planning"
               className="w-full border border-slate-200 rounded-xl px-4 py-2 text-sm text-slate-800 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500"
             />
           </div>
@@ -701,7 +1149,7 @@ export const BookingModal: React.FC<BookingModalProps> = ({
             <textarea
               value={description}
               onChange={(e) => setDescription(e.target.value)}
-              placeholder="Briefly state meeting focus..."
+              placeholder="Briefly state meeting agenda and goals..."
               rows={2}
               className="w-full border border-slate-200 rounded-xl px-4 py-2 text-sm text-slate-800 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500"
             />
@@ -789,7 +1237,7 @@ export const BookingModal: React.FC<BookingModalProps> = ({
                     <button
                       type="button"
                       onClick={() => handleRemoveAttendee(index)}
-                      className="text-indigo-400 hover:text-indigo-700 hover:bg-indigo-100/50 rounded-full p-0.5"
+                      className="text-indigo-400 hover:text-indigo-700 hover:bg-indigo-100/50 rounded-full p-0.5 cursor-pointer"
                     >
                       <X className="w-3 h-3" />
                     </button>
@@ -807,7 +1255,7 @@ export const BookingModal: React.FC<BookingModalProps> = ({
                 <div>
                   <h4 className="text-xs font-bold text-slate-800">Google Calendar Sync</h4>
                   <p className="text-[10px] text-slate-500">
-                    Instantly sync this event on your Google Calendar.
+                    Instantly sync this event series on your Google Calendar.
                   </p>
                 </div>
               </div>
@@ -830,6 +1278,11 @@ export const BookingModal: React.FC<BookingModalProps> = ({
             {editingBooking && !isOwner ? (
               <span className="flex items-center gap-1 text-slate-500 font-medium">
                 <Lock className="w-3.5 h-3.5" /> Read-Only Mode
+              </span>
+            ) : isRecurring ? (
+              <span className="flex items-center gap-1 text-indigo-600 font-bold">
+                <Repeat className="w-3.5 h-3.5" />
+                <span>{includedDates.length} sessions queued</span>
               </span>
             ) : (
               <>
@@ -860,11 +1313,25 @@ export const BookingModal: React.FC<BookingModalProps> = ({
                   type="button"
                   onClick={handleSubmit}
                   disabled={isSaving || isConflict || !!errorMessage}
-                  className={`bg-indigo-600 hover:bg-indigo-700 text-white font-bold px-5 py-2 rounded-xl text-xs shadow-md shadow-indigo-100 transition-colors cursor-pointer ${
+                  className={`bg-indigo-600 hover:bg-indigo-700 text-white font-bold px-5 py-2 rounded-xl text-xs shadow-md shadow-indigo-100 transition-colors cursor-pointer flex items-center gap-1.5 ${
                     (isSaving || isConflict || !!errorMessage) ? 'opacity-50 pointer-events-none' : ''
                   }`}
                 >
-                  {isSaving ? 'Processing...' : editingBooking ? 'Update Booking' : 'Book Room'}
+                  {isSaving ? (
+                    <>
+                      <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                      <span>Processing...</span>
+                    </>
+                  ) : editingBooking ? (
+                    'Update Booking'
+                  ) : isRecurring ? (
+                    <>
+                      <span>Book Series ({includedDates.length} Sessions)</span>
+                      <ArrowRight className="w-3.5 h-3.5" />
+                    </>
+                  ) : (
+                    'Book Room'
+                  )}
                 </button>
               </>
             )}

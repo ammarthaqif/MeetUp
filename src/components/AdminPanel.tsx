@@ -2,14 +2,18 @@ import React, { useState } from 'react';
 import { 
   Building2, Plus, Trash2, Edit3, X, HelpCircle, Check, 
   Settings, Users, Shield, MapPin, Key, Layers, ChevronDown, 
-  ShieldCheck, History, Download, FileSpreadsheet, FileText
+  ShieldCheck, History, Download, FileSpreadsheet, FileText,
+  Briefcase
 } from 'lucide-react';
-import { Office, Room, Booking, ApprovedUser, AccessKey, AuditLog } from '../types';
+import { Office, Room, Booking, ApprovedUser, AccessKey, AuditLog, Tenant } from '../types';
 import { AdminAccessControl } from './AdminAccessControl';
 import { AdminAuditLogs } from './AdminAuditLogs';
+import { AdminTenantsTab } from './AdminTenantsTab';
 import { timeToMinutes } from '../utils';
 
 interface AdminPanelProps {
+  tenants: Tenant[];
+  currentTenant: Tenant | null;
   offices: Office[];
   rooms: Room[];
   bookings: Booking[];
@@ -17,6 +21,11 @@ interface AdminPanelProps {
   accessKeys: AccessKey[];
   auditLogs: AuditLog[];
   adminEmail: string;
+  isMasterAdmin?: boolean;
+  onSaveTenant?: (tenantData: Tenant) => void;
+  onDeleteTenant?: (tenantId: string) => void;
+  onGenerateTenantToken?: (tenantId: string, label: string, role: 'company_admin' | 'staff' | 'guest') => Promise<AccessKey>;
+  onSwitchTenant?: (tenant: Tenant, token?: string) => void;
   onSaveOffice: (office: Omit<Office, 'createdAt'> & { id?: string }) => Promise<void>;
   onDeleteOffice: (officeId: string) => Promise<void>;
   onSaveRoom: (room: Room) => Promise<void>;
@@ -33,6 +42,8 @@ interface AdminPanelProps {
 }
 
 export const AdminPanel: React.FC<AdminPanelProps> = ({
+  tenants,
+  currentTenant,
   offices,
   rooms,
   bookings,
@@ -40,6 +51,11 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
   accessKeys,
   auditLogs,
   adminEmail,
+  isMasterAdmin = false,
+  onSaveTenant,
+  onDeleteTenant,
+  onGenerateTenantToken,
+  onSwitchTenant,
   onSaveOffice,
   onDeleteOffice,
   onSaveRoom,
@@ -54,7 +70,9 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
   onClearAuditLogs,
   onExitAdmin,
 }) => {
-  const [activeTab, setActiveTab] = useState<'offices' | 'rooms' | 'bookings' | 'access' | 'audit'>('offices');
+  const [activeTab, setActiveTab] = useState<'tenants' | 'offices' | 'rooms' | 'bookings' | 'access' | 'audit'>(
+    isMasterAdmin ? 'tenants' : 'offices'
+  );
   const [errorMessage, setErrorMessage] = useState('');
   const [successMessage, setSuccessMessage] = useState('');
 
@@ -329,20 +347,47 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
       {/* Top Admin Bar */}
       <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 border-b border-slate-800 pb-5">
         <div className="flex items-center gap-2.5">
-          <div className="p-2 bg-indigo-600 rounded-xl text-white">
+          <div className={`p-2 rounded-xl text-white ${isMasterAdmin ? 'bg-indigo-600' : 'bg-emerald-600'}`}>
             <Shield className="w-5 h-5" />
           </div>
           <div>
-            <h2 className="text-lg font-bold font-sans tracking-tight">Admin Control Room</h2>
-            <p className="text-xs text-slate-400 font-mono">WORKSPACE MATRIX CONFIGURATION Panel</p>
+            <div className="flex items-center gap-2">
+              <h2 className="text-lg font-bold font-sans tracking-tight">
+                {isMasterAdmin ? 'Master Superadmin Console' : `${currentTenant?.name || 'Company'} Admin Console`}
+              </h2>
+              <span className={`text-[10px] px-2 py-0.5 rounded-full font-bold uppercase tracking-wider ${
+                isMasterAdmin 
+                  ? 'bg-indigo-500/20 text-indigo-300 border border-indigo-500/40' 
+                  : 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/40'
+              }`}>
+                {isMasterAdmin ? 'Super User' : 'Company Focal Admin'}
+              </span>
+            </div>
+            <p className="text-xs text-slate-400 font-mono">
+              {isMasterAdmin 
+                ? 'System Super User: ammarthaqif.ar@gmail.com • Global Access' 
+                : `Authorized Administrator • Limited to ${currentTenant?.name || 'Company'} Dashboard`}
+            </p>
           </div>
         </div>
         
-        <div className="flex gap-2">
+        <div className="flex flex-wrap gap-2">
+          {isMasterAdmin && (
+            <button
+              onClick={() => setActiveTab('tenants')}
+              className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-all cursor-pointer flex items-center gap-1.5 ${
+                activeTab === 'tenants' ? 'bg-indigo-600 text-white shadow-md' : 'bg-slate-800 text-slate-300 hover:bg-slate-750'
+              }`}
+            >
+              <Briefcase className="w-3.5 h-3.5 text-indigo-300" />
+              <span>Companies & Tenants</span>
+              <span className="text-[10px] bg-slate-900/80 px-1.5 py-0.2 rounded font-mono">{tenants.length}</span>
+            </button>
+          )}
           <button
             onClick={() => setActiveTab('offices')}
             className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-all cursor-pointer ${
-              activeTab === 'offices' ? 'bg-indigo-600 text-white' : 'bg-slate-800 text-slate-300 hover:bg-slate-750'
+              activeTab === 'offices' ? 'bg-indigo-600 text-white shadow-md' : 'bg-slate-800 text-slate-300 hover:bg-slate-750'
             }`}
           >
             🏢 Offices Setup
@@ -355,7 +400,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
               }
             }}
             className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-all cursor-pointer ${
-              activeTab === 'rooms' ? 'bg-indigo-600 text-white' : 'bg-slate-800 text-slate-300 hover:bg-slate-750'
+              activeTab === 'rooms' ? 'bg-indigo-600 text-white shadow-md' : 'bg-slate-800 text-slate-300 hover:bg-slate-750'
             }`}
           >
             🚪 Rooms Config
@@ -363,7 +408,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
           <button
             onClick={() => setActiveTab('bookings')}
             className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-all cursor-pointer ${
-              activeTab === 'bookings' ? 'bg-indigo-600 text-white' : 'bg-slate-800 text-slate-300 hover:bg-slate-750'
+              activeTab === 'bookings' ? 'bg-indigo-600 text-white shadow-md' : 'bg-slate-800 text-slate-300 hover:bg-slate-750'
             }`}
           >
             📅 Master Reservations
@@ -371,7 +416,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
           <button
             onClick={() => setActiveTab('access')}
             className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-all cursor-pointer ${
-              activeTab === 'access' ? 'bg-indigo-600 text-white' : 'bg-slate-800 text-slate-300 hover:bg-slate-750'
+              activeTab === 'access' ? 'bg-indigo-600 text-white shadow-md' : 'bg-slate-800 text-slate-300 hover:bg-slate-750'
             }`}
           >
             🛡️ Access Control & Keys
@@ -379,7 +424,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
           <button
             onClick={() => setActiveTab('audit')}
             className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-all cursor-pointer ${
-              activeTab === 'audit' ? 'bg-indigo-600 text-white' : 'bg-slate-800 text-slate-300 hover:bg-slate-750'
+              activeTab === 'audit' ? 'bg-indigo-600 text-white shadow-md' : 'bg-slate-800 text-slate-300 hover:bg-slate-750'
             }`}
           >
             📜 Audit History
@@ -403,6 +448,22 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
         <div className="p-3 bg-emerald-950/80 border border-emerald-800 text-emerald-200 text-xs rounded-xl flex items-center gap-2">
           <span className="font-bold">Success:</span> {successMessage}
         </div>
+      )}
+
+      {/* --- TAB 0: MULTI-TENANT DIRECTORY --- */}
+      {activeTab === 'tenants' && onSaveTenant && onDeleteTenant && onGenerateTenantToken && onSwitchTenant && (
+        <AdminTenantsTab
+          tenants={tenants}
+          currentTenant={currentTenant}
+          accessKeys={accessKeys}
+          offices={offices}
+          rooms={rooms}
+          bookings={bookings}
+          onSaveTenant={onSaveTenant}
+          onDeleteTenant={onDeleteTenant}
+          onGenerateTenantToken={onGenerateTenantToken}
+          onSwitchTenant={onSwitchTenant}
+        />
       )}
 
       {/* --- TAB 1: OFFICES MANAGEMENT --- */}
@@ -930,6 +991,9 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
             approvedUsers={approvedUsers}
             accessKeys={accessKeys}
             adminEmail={adminEmail}
+            currentTenant={currentTenant}
+            isMasterAdmin={isMasterAdmin}
+            onSaveTenant={onSaveTenant}
             onAddApprovedUser={onAddApprovedUser}
             onBulkAddApprovedUsers={onBulkAddApprovedUsers}
             onRemoveApprovedUser={onRemoveApprovedUser}

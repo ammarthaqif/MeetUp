@@ -256,3 +256,215 @@ export const getBookingStatus = (booking: Booking): 'past' | 'ongoing' | 'upcomi
     }
   }
 };
+
+// =========================================================================
+// Recurring Booking Engine Utilities
+// =========================================================================
+
+export type RecurrenceFrequency = 
+  | 'DAILY' 
+  | 'WEEKDAYS' 
+  | 'WEEKLY' 
+  | 'BIWEEKLY' 
+  | 'MONTHLY_DATE' 
+  | 'MONTHLY_DAY' 
+  | 'CUSTOM_DAYS';
+
+export interface RecurrenceConfig {
+  startDate: string; // YYYY-MM-DD
+  frequency: RecurrenceFrequency;
+  repeatDays?: string[]; // e.g. ['Monday', 'Wednesday']
+  endType: 'count' | 'until_date';
+  occurrencesCount?: number; // e.g. 4, 8, 12, 24
+  endDate?: string; // YYYY-MM-DD
+  maxGenerated?: number;
+}
+
+/**
+ * Returns ordinal information for a specific date (e.g. 3rd Thursday)
+ */
+export const getWeekdayOrdinalInfo = (dateStr: string): { nth: number; dayName: string; weekdayIndex: number; label: string } => {
+  const d = parseISODate(dateStr);
+  const dayName = d.toLocaleDateString('en-US', { weekday: 'long' });
+  const weekdayIndex = d.getDay(); // 0 is Sunday
+  const dayNum = d.getDate();
+  const nth = Math.ceil(dayNum / 7);
+  const nthLabels = ['1st', '2nd', '3rd', '4th', '5th'];
+  const label = `${nthLabels[nth - 1] || `${nth}th`} ${dayName}`;
+  return { nth, dayName, weekdayIndex, label };
+};
+
+/**
+ * Returns the Nth weekday in a given year and month
+ */
+export const getNthWeekdayOfMonth = (year: number, month: number, targetWeekday: number, nth: number): Date => {
+  const daysInMonth = new Date(year, month + 1, 0).getDate();
+  
+  if (nth === -1 || nth >= 5) {
+    const lastDay = new Date(year, month, daysInMonth);
+    const lastDayWeekday = lastDay.getDay();
+    const diff = (lastDayWeekday - targetWeekday + 7) % 7;
+    return new Date(year, month, daysInMonth - diff);
+  }
+
+  const firstDay = new Date(year, month, 1);
+  const firstDayWeekday = firstDay.getDay();
+  const diff = (targetWeekday - firstDayWeekday + 7) % 7;
+  const targetDay = 1 + diff + (nth - 1) * 7;
+
+  if (targetDay > daysInMonth) {
+    return getNthWeekdayOfMonth(year, month, targetWeekday, -1);
+  }
+
+  return new Date(year, month, targetDay);
+};
+
+/**
+ * Generates an array of formatted YYYY-MM-DD dates based on a recurrence configuration
+ */
+export const generateRecurringDates = (config: RecurrenceConfig): string[] => {
+  const {
+    startDate,
+    frequency,
+    repeatDays = [],
+    endType,
+    occurrencesCount = 4,
+    endDate = '',
+    maxGenerated = 100,
+  } = config;
+
+  if (!startDate) return [];
+  const startObj = parseISODate(startDate);
+  if (isNaN(startObj.getTime())) return [];
+
+  const endLimitDate = endType === 'until_date' && endDate ? parseISODate(endDate) : null;
+  const targetCount = endType === 'count' ? Math.max(1, Math.min(occurrencesCount, maxGenerated)) : maxGenerated;
+
+  const resultDates: string[] = [];
+  const baseDayName = startObj.toLocaleDateString('en-US', { weekday: 'long' });
+  const activeRepeatDays = repeatDays.length > 0 ? repeatDays : [baseDayName];
+  const { nth: baseNth, weekdayIndex: baseWeekdayIndex } = getWeekdayOrdinalInfo(startDate);
+
+  switch (frequency) {
+    case 'DAILY': {
+      let cur = new Date(startObj);
+      while (resultDates.length < targetCount) {
+        if (endLimitDate && cur > endLimitDate) break;
+        resultDates.push(formatDateToISO(cur));
+        cur.setDate(cur.getDate() + 1);
+      }
+      break;
+    }
+
+    case 'WEEKDAYS': {
+      let cur = new Date(startObj);
+      let safetyCounter = 0;
+      while (resultDates.length < targetCount && safetyCounter < 500) {
+        safetyCounter++;
+        if (endLimitDate && cur > endLimitDate) break;
+        const day = cur.getDay();
+        if (day !== 0 && day !== 6) { // Monday to Friday
+          resultDates.push(formatDateToISO(cur));
+        }
+        cur.setDate(cur.getDate() + 1);
+      }
+      break;
+    }
+
+    case 'WEEKLY':
+    case 'BIWEEKLY': {
+      const stepWeeks = frequency === 'BIWEEKLY' ? 2 : 1;
+      let curWeekStart = new Date(startObj);
+      // Align to Monday of start week or iterate relative to start
+      let safetyCounter = 0;
+
+      while (resultDates.length < targetCount && safetyCounter < 200) {
+        safetyCounter++;
+        // Check days in this week window
+        for (let i = 0; i < 7; i++) {
+          const testDate = new Date(curWeekStart);
+          testDate.setDate(curWeekStart.getDate() + i);
+          
+          if (testDate < startObj) continue;
+          if (endLimitDate && testDate > endLimitDate) break;
+
+          const dayName = testDate.toLocaleDateString('en-US', { weekday: 'long' });
+          if (activeRepeatDays.includes(dayName)) {
+            const dateStr = formatDateToISO(testDate);
+            if (!resultDates.includes(dateStr)) {
+              resultDates.push(dateStr);
+              if (resultDates.length >= targetCount) break;
+            }
+          }
+        }
+
+        if (endLimitDate && curWeekStart > endLimitDate) break;
+        curWeekStart.setDate(curWeekStart.getDate() + 7 * stepWeeks);
+      }
+      break;
+    }
+
+    case 'MONTHLY_DATE': {
+      const baseDayOfMonth = startObj.getDate();
+      let year = startObj.getFullYear();
+      let month = startObj.getMonth();
+
+      while (resultDates.length < targetCount) {
+        const daysInCurrentMonth = new Date(year, month + 1, 0).getDate();
+        const targetDay = Math.min(baseDayOfMonth, daysInCurrentMonth);
+        const curDate = new Date(year, month, targetDay);
+
+        if (curDate >= startObj) {
+          if (endLimitDate && curDate > endLimitDate) break;
+          resultDates.push(formatDateToISO(curDate));
+        }
+
+        month++;
+        if (month > 11) {
+          month = 0;
+          year++;
+        }
+      }
+      break;
+    }
+
+    case 'MONTHLY_DAY': {
+      let year = startObj.getFullYear();
+      let month = startObj.getMonth();
+
+      while (resultDates.length < targetCount) {
+        const curDate = getNthWeekdayOfMonth(year, month, baseWeekdayIndex, baseNth);
+        if (curDate >= startObj) {
+          if (endLimitDate && curDate > endLimitDate) break;
+          resultDates.push(formatDateToISO(curDate));
+        }
+
+        month++;
+        if (month > 11) {
+          month = 0;
+          year++;
+        }
+      }
+      break;
+    }
+
+    case 'CUSTOM_DAYS':
+    default: {
+      let cur = new Date(startObj);
+      const effectiveEnd = endLimitDate || new Date(startObj.getTime() + 30 * 24 * 60 * 60 * 1000);
+      let safetyCounter = 0;
+
+      while (cur <= effectiveEnd && resultDates.length < targetCount && safetyCounter < 500) {
+        safetyCounter++;
+        const dayName = cur.toLocaleDateString('en-US', { weekday: 'long' });
+        if (activeRepeatDays.includes(dayName)) {
+          resultDates.push(formatDateToISO(cur));
+        }
+        cur.setDate(cur.getDate() + 1);
+      }
+      break;
+    }
+  }
+
+  return Array.from(new Set(resultDates)).sort();
+};
