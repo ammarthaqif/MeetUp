@@ -245,7 +245,7 @@ export default function App() {
   };
 
   // Master Admin & Company Focal Admin permissions
-  // Super Admin dashboard is strictly restricted to ammarthaqif.ar@gmail.com
+  // Super Admin dashboard is restricted to designated platform superadmin
   const isMasterAdmin = !!user?.email && (user.email.toLowerCase() === ADMIN_EMAIL.toLowerCase());
   
   const isFocalAdmin = !!user?.email && !!activeTenant?.focalAdminEmails && activeTenant.focalAdminEmails.some(
@@ -893,8 +893,7 @@ export default function App() {
   };
 
   // -------------------------------------------------------------
-  // Admin Mode Entry: STRICTLY RESTRICTED TO ammarthaqif.ar@gmail.com (Superadmin)
-  // OR Assigned Focal Admins for their respective company dashboard
+  // Admin Mode Entry: Restricted to Master Superadmin or Company Focal Admins
   // -------------------------------------------------------------
   const handleOpenAdminConsole = () => {
     if (isMasterAdmin) {
@@ -902,7 +901,7 @@ export default function App() {
       try {
         localStorage.setItem('office_sync_admin_mode', 'true');
       } catch {}
-      showNotification('success', 'Master Superadmin Control Room unlocked for ' + ADMIN_EMAIL);
+      showNotification('success', 'Master Superadmin Control Room unlocked with full platform privileges.');
     } else if (isFocalAdmin) {
       setIsAdminMode(true);
       try {
@@ -2258,8 +2257,8 @@ export default function App() {
                     <div className="flex items-center gap-1.5 text-[11px] font-bold text-amber-900 uppercase">
                       <span>👑 Master Platform Superadmin</span>
                     </div>
-                    <div className="font-mono text-xs text-amber-900 font-bold mt-1 select-all">
-                      {ADMIN_EMAIL}
+                    <div className="text-xs text-amber-900 font-semibold mt-1">
+                      Authorized Master Administrator Account
                     </div>
                     <p className="text-[10px] text-amber-700 mt-0.5">
                       Full fleet control, tenant provisioning & focal assignment.
@@ -2294,7 +2293,7 @@ export default function App() {
                 </div>
 
                 <p className="text-[11px] text-slate-400 pt-1">
-                  Please sign in using an authorized account or contact <span className="font-mono font-semibold text-slate-600">{ADMIN_EMAIL}</span> to assign focal administrative privileges.
+                  Please sign in using an authorized account or contact your platform administrator to assign focal administrative privileges.
                 </p>
               </div>
 

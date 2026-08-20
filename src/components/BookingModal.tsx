@@ -49,7 +49,7 @@ export const BookingModal: React.FC<BookingModalProps> = ({
   currentUser,
   bookings,
   googleSyncAvailable,
-  adminEmail = 'ammarthaqif.ar@gmail.com',
+  adminEmail = 'admin@enterprise.internal',
 }) => {
   const [roomId, setRoomId] = useState('');
   const [date, setDate] = useState('');
@@ -545,7 +545,7 @@ export const BookingModal: React.FC<BookingModalProps> = ({
               <div>
                 <span className="font-bold text-amber-950">Restricted Access (View-Only):</span>
                 <p className="text-[11px] text-amber-800 mt-0.5 leading-relaxed">
-                  This reservation was created by <strong className="text-slate-900">{editingBooking.hostName} ({editingBooking.hostEmail})</strong>. To prevent accidental disruption, only the meeting owner or the administrator (<span className="font-mono text-xs">{adminEmail}</span>) can edit or cancel this booking.
+                  This reservation was created by <strong className="text-slate-900">{editingBooking.hostName} ({editingBooking.hostEmail})</strong>. To prevent accidental disruption, only the meeting owner or an authorized administrator can edit or cancel this booking.
                 </p>
               </div>
             </div>

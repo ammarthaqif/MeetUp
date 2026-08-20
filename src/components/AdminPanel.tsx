@@ -365,7 +365,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
             </div>
             <p className="text-xs text-slate-400 font-mono">
               {isMasterAdmin 
-                ? 'System Super User: ammarthaqif.ar@gmail.com • Global Access' 
+                ? 'Master Super Administrator • Global Access' 
                 : `Authorized Administrator • Limited to ${currentTenant?.name || 'Company'} Dashboard`}
             </p>
           </div>
