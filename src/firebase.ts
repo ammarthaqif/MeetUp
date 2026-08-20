@@ -1,6 +1,7 @@
 import { initializeApp, getApps, FirebaseApp } from 'firebase/app';
 import { getAuth, signInWithPopup, GoogleAuthProvider, onAuthStateChanged, User, Auth } from 'firebase/auth';
 import { getFirestore, Firestore } from 'firebase/firestore';
+import firebaseConfigJson from '../firebase-applet-config.json';
 
 // Default configuration with safe fallback
 let firebaseConfig: any = {
@@ -12,14 +13,8 @@ let firebaseConfig: any = {
   messagingSenderId: "365252719463"
 };
 
-try {
-  // eslint-disable-next-line @typescript-eslint/no-var-requires
-  const importedConfig = require('../firebase-applet-config.json');
-  if (importedConfig && importedConfig.apiKey) {
-    firebaseConfig = importedConfig;
-  }
-} catch {
-  // Config json fallback
+if (firebaseConfigJson && (firebaseConfigJson as any).apiKey) {
+  firebaseConfig = firebaseConfigJson;
 }
 
 // Safely initialize Firebase app and services
