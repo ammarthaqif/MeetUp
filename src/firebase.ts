@@ -13,7 +13,13 @@ let firebaseConfig: any = {
   messagingSenderId: "365252719463"
 };
 
-if (firebaseConfigJson && (firebaseConfigJson as any).apiKey) {
+if (
+  firebaseConfigJson &&
+  (firebaseConfigJson as any).apiKey &&
+  typeof (firebaseConfigJson as any).apiKey === 'string' &&
+  !(firebaseConfigJson as any).apiKey.startsWith('dummy') &&
+  (firebaseConfigJson as any).projectId !== 'dummy-project-id'
+) {
   firebaseConfig = firebaseConfigJson;
 }
 
@@ -26,7 +32,12 @@ try {
   const existingApps = getApps();
   if (existingApps.length > 0) {
     app = existingApps[0];
-  } else if (firebaseConfig && firebaseConfig.apiKey) {
+  } else if (
+    firebaseConfig &&
+    firebaseConfig.apiKey &&
+    !firebaseConfig.apiKey.startsWith('dummy') &&
+    firebaseConfig.projectId !== 'dummy-project-id'
+  ) {
     app = initializeApp(firebaseConfig);
   }
   if (app) {

@@ -1605,6 +1605,32 @@ export default function App() {
     showNotification('info', 'Audit trail cleared.');
   };
 
+  const handleImportBookingsFromExcel = async (importedBookings: Booking[], logDetails: string) => {
+    if (importedBookings.length === 0) return;
+
+    setBookings(prev => [...importedBookings, ...prev]);
+
+    try {
+      if (db) {
+        for (const b of importedBookings) {
+          setDoc(doc(db, 'bookings', b.id), b).catch(() => {});
+        }
+      }
+    } catch (err) {
+      console.error('Error saving imported bookings to Firestore:', err);
+    }
+
+    logActivity({
+      action: 'BOOKING_CREATED',
+      actorEmail: user?.email || ADMIN_EMAIL,
+      actorName: user?.displayName || 'Administrator',
+      details: logDetails || `Imported ${importedBookings.length} bookings via Excel Calendar Importer.`,
+      tenantId: activeTenant?.id
+    });
+
+    showNotification('success', `Imported ${importedBookings.length} reservations successfully.`);
+  };
+
   // -------------------------------------------------------------
   // Filtering Algorithm (Current Tenant & Office context)
   // -------------------------------------------------------------
@@ -1810,6 +1836,7 @@ export default function App() {
             onSaveRoom={handleSaveRoomAdmin}
             onDeleteRoom={handleDeleteRoomAdmin}
             onCancelBooking={(booking) => handleCancelBooking(booking.id)}
+            onImportBookings={handleImportBookingsFromExcel}
             onAddApprovedUser={handleAddApprovedUser}
             onBulkAddApprovedUsers={handleBulkAddApprovedUsers}
             onRemoveApprovedUser={handleRemoveApprovedUser}

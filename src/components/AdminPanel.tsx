@@ -3,12 +3,13 @@ import {
   Building2, Plus, Trash2, Edit3, X, HelpCircle, Check, 
   Settings, Users, Shield, MapPin, Key, Layers, ChevronDown, 
   ShieldCheck, History, Download, FileSpreadsheet, FileText,
-  Briefcase
+  Briefcase, Upload, Calendar
 } from 'lucide-react';
 import { Office, Room, Booking, ApprovedUser, AccessKey, AuditLog, Tenant } from '../types';
 import { AdminAccessControl } from './AdminAccessControl';
 import { AdminAuditLogs } from './AdminAuditLogs';
 import { AdminTenantsTab } from './AdminTenantsTab';
+import { AdminExcelImportModal } from './AdminExcelImportModal';
 import { timeToMinutes } from '../utils';
 
 interface AdminPanelProps {
@@ -31,6 +32,7 @@ interface AdminPanelProps {
   onSaveRoom: (room: Room) => Promise<void>;
   onDeleteRoom: (roomId: string) => Promise<void>;
   onCancelBooking: (booking: Booking) => Promise<void>;
+  onImportBookings?: (importedBookings: Booking[], logDetails: string) => Promise<void>;
   onAddApprovedUser: (email: string, name?: string, department?: string) => Promise<void>;
   onBulkAddApprovedUsers: (emails: string[]) => Promise<number>;
   onRemoveApprovedUser: (userId: string) => Promise<void>;
@@ -61,6 +63,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
   onSaveRoom,
   onDeleteRoom,
   onCancelBooking,
+  onImportBookings,
   onAddApprovedUser,
   onBulkAddApprovedUsers,
   onRemoveApprovedUser,
@@ -75,6 +78,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
   );
   const [errorMessage, setErrorMessage] = useState('');
   const [successMessage, setSuccessMessage] = useState('');
+  const [isExcelImportOpen, setIsExcelImportOpen] = useState(false);
 
 
   // Office form states
@@ -909,16 +913,26 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
                 Centralized ledger with direct CSV audit exporting and administrative cancellation authority.
               </p>
             </div>
-            <div className="flex items-center gap-2">
+            <div className="flex flex-wrap items-center gap-2">
+              <button
+                type="button"
+                onClick={() => setIsExcelImportOpen(true)}
+                className="bg-indigo-600 hover:bg-indigo-500 text-white font-bold px-3.5 py-2 rounded-xl text-xs flex items-center gap-2 transition-all shadow-md shadow-indigo-950 cursor-pointer"
+                title="Import bookings from Excel (.xlsx, .xls, .csv) with manual calendar or tabular layout"
+              >
+                <Upload className="w-4 h-4" />
+                <span>Import from Excel Calendar</span>
+              </button>
+
               <button
                 type="button"
                 onClick={handleExportBookingsCSV}
                 disabled={bookings.length === 0}
-                className="bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 disabled:pointer-events-none text-white font-bold px-3.5 py-2 rounded-xl text-xs flex items-center gap-2 transition-all shadow-md shadow-emerald-950 cursor-pointer"
+                className="bg-slate-800 hover:bg-slate-750 text-slate-200 border border-slate-700 disabled:opacity-50 disabled:pointer-events-none font-bold px-3.5 py-2 rounded-xl text-xs flex items-center gap-2 transition-all cursor-pointer"
                 title="Export all reservations to CSV spreadsheet"
               >
-                <FileSpreadsheet className="w-4 h-4" />
-                <span>Export Bookings to CSV</span>
+                <FileSpreadsheet className="w-4 h-4 text-emerald-400" />
+                <span>Export to CSV</span>
               </button>
             </div>
           </div>
@@ -1013,6 +1027,22 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
           />
         </div>
       )}
+
+      {/* --- EXCEL CALENDAR BOOKINGS IMPORT MODAL --- */}
+      <AdminExcelImportModal
+        isOpen={isExcelImportOpen}
+        onClose={() => setIsExcelImportOpen(false)}
+        offices={offices}
+        rooms={rooms}
+        bookings={bookings}
+        adminEmail={adminEmail}
+        onImportBookings={async (importedBookings, logDetails) => {
+          if (onImportBookings) {
+            await onImportBookings(importedBookings, logDetails);
+          }
+          triggerNotification('success', `Successfully imported ${importedBookings.length} reservations from Excel.`);
+        }}
+      />
 
     </div>
   );
