@@ -367,6 +367,44 @@ export const TenantPortalGate: React.FC<TenantPortalGateProps> = ({
                     </>
                   )}
                 </button>
+
+                {/* Quick Demo Access Token Presets */}
+                <div className="pt-2 border-t border-slate-800/80 space-y-2">
+                  <div className="flex items-center justify-between text-[11px]">
+                    <span className="text-slate-400 font-semibold flex items-center gap-1">
+                      <Sparkles className="w-3.5 h-3.5 text-amber-400" /> Quick Demo Token Shortcuts:
+                    </span>
+                    <span className="text-slate-500 font-mono text-[10px]">Click to auto-fill & unlock</span>
+                  </div>
+                  <div className="grid grid-cols-2 gap-2">
+                    {tenants.slice(0, 4).map(t => {
+                      const key = accessKeys.find(k => k.tenantId === t.id && k.active)?.token || `${t.code}-CORP-2025`;
+                      return (
+                        <button
+                          key={t.id}
+                          type="button"
+                          onClick={() => {
+                            setTokenInput(key);
+                            handleVerifyToken(key);
+                          }}
+                          className="p-2.5 rounded-xl bg-slate-950/80 hover:bg-slate-800 border border-slate-800 hover:border-indigo-500/50 text-left transition-all cursor-pointer group"
+                        >
+                          <div className="flex items-center justify-between">
+                            <span className="text-xs font-bold text-slate-200 group-hover:text-indigo-300 truncate">
+                              {t.name}
+                            </span>
+                            <span className="text-[10px] text-slate-500 font-mono group-hover:text-slate-300">
+                              {t.code}
+                            </span>
+                          </div>
+                          <div className="text-[10px] text-indigo-400 font-mono mt-0.5">
+                            {key}
+                          </div>
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
               </form>
             )}
 
