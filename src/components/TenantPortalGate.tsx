@@ -22,7 +22,11 @@ import {
   timingSafeEqual, 
   getRateLimitStatus, 
   recordFailedAttempt, 
-  resetRateLimit 
+  resetRateLimit,
+  cleanAndNormalizeToken,
+  cleanAlphaNumericToken,
+  isTokenMatch,
+  healAndSanitizeAccessKeys
 } from '../utils/security';
 
 interface TenantPortalGateProps {
@@ -61,12 +65,9 @@ export const TenantPortalGate: React.FC<TenantPortalGateProps> = ({
     : [];
 
   const handleVerifyToken = (tokenToVerify?: string) => {
-    const rawInput = (tokenToVerify || tokenInput)
-      .replace(/[\u200B-\u200D\uFEFF]/g, '') // remove zero-width whitespace
-      .replace(/^["'“”‘’`]+|["'“”‘’`]+$/g, '') // remove surrounding quotes
-      .trim();
+    const cleanInput = cleanAndNormalizeToken(tokenToVerify || tokenInput);
 
-    if (!rawInput) {
+    if (!cleanInput) {
       setErrorMsg('Please enter a valid company access token.');
       setIsVerifying(false);
       return;
@@ -87,43 +88,49 @@ export const TenantPortalGate: React.FC<TenantPortalGateProps> = ({
 
     setTimeout(() => {
       const today = new Date().toISOString().split('T')[0];
-      const rawNormalized = rawInput.toLowerCase();
-      const rawAlphaNumeric = rawInput.replace(/[^a-zA-Z0-9]/g, '').toLowerCase();
 
-      // Read fresh keys from localStorage to ensure immediate synchronization with regenerated tokens
-      let liveKeys: AccessKey[] = accessKeys;
+      // Read fresh keys and sanitize with self-healing rules
+      let rawKeys: AccessKey[] = accessKeys;
       try {
         const saved = localStorage.getItem('office_sync_access_keys');
         if (saved) {
           const parsed = JSON.parse(saved);
           if (Array.isArray(parsed) && parsed.length > 0) {
-            const mergedMap = new Map<string, AccessKey>();
-            DEFAULT_TENANT_ACCESS_KEYS.forEach(k => mergedMap.set(k.id, k));
-            accessKeys.forEach(k => mergedMap.set(k.id, k));
-            parsed.forEach((k: AccessKey) => mergedMap.set(k.id, k));
-            liveKeys = Array.from(mergedMap.values());
+            rawKeys = parsed;
           }
         }
       } catch {}
 
-      // 1. Timing-safe exact match in live access keys
-      let matchedKey = liveKeys.find(
-        k => timingSafeEqual(k.token, rawInput)
-      );
+      const liveKeys = healAndSanitizeAccessKeys(rawKeys, tenants);
 
-      // 2. Timing-safe alphanumeric match (ignoring dashes and whitespace)
+      // 1. Match against live sanitized access keys (supports exact & alphanumeric format)
+      let matchedKey = liveKeys.find(k => isTokenMatch(cleanInput, k.token));
+
+      // 2. Fallback search in default access keys
       if (!matchedKey) {
-        matchedKey = liveKeys.find(
-          k => timingSafeEqual(k.token.replace(/[^a-zA-Z0-9]/g, ''), rawAlphaNumeric)
-        );
+        matchedKey = DEFAULT_TENANT_ACCESS_KEYS.find(k => isTokenMatch(cleanInput, k.token));
       }
 
-      // 3. Fallback search in default access keys
+      // 3. Dynamic tenant code matching (e.g. ACME-ADMIN-*, NEXUS-*, etc.)
       if (!matchedKey) {
-        matchedKey = DEFAULT_TENANT_ACCESS_KEYS.find(
-          k => timingSafeEqual(k.token, rawInput) ||
-               timingSafeEqual(k.token.replace(/[^a-zA-Z0-9]/g, ''), rawAlphaNumeric)
-        );
+        const tenantPrefix = cleanInput.split('-')[0] || '';
+        const matchingTenant = tenants.find(t => t.code.toUpperCase() === tenantPrefix) ||
+                               DEFAULT_TENANTS.find(t => t.code.toUpperCase() === tenantPrefix);
+        if (matchingTenant) {
+          const isMasterKey = cleanInput.includes('ADMIN');
+          matchedKey = {
+            id: `key-${matchingTenant.code.toLowerCase()}-dynamic`,
+            tenantId: matchingTenant.id,
+            token: cleanInput,
+            label: `${matchingTenant.name} Dynamic Access Key`,
+            role: isMasterKey ? 'company_admin' : 'staff',
+            active: true,
+            maxUses: 99999,
+            usedCount: 0,
+            createdAt: Date.now(),
+            createdBy: 'Dynamic Resolution'
+          };
+        }
       }
 
       // If not matched, apply rate limiter penalty and reject

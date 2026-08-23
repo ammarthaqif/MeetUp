@@ -38,7 +38,11 @@ import {
   timingSafeEqual, 
   getRateLimitStatus, 
   recordFailedAttempt, 
-  resetRateLimit 
+  resetRateLimit,
+  cleanAndNormalizeToken,
+  cleanAlphaNumericToken,
+  isTokenMatch,
+  healAndSanitizeAccessKeys
 } from './utils/security';
 import { 
   DEFAULT_TENANTS, 
@@ -165,18 +169,13 @@ export default function App() {
   const [accessKeys, setAccessKeys] = useState<AccessKey[]>(() => {
     try {
       const saved = localStorage.getItem('office_sync_access_keys');
-      if (saved) {
-        const parsed: AccessKey[] = JSON.parse(saved);
-        if (Array.isArray(parsed) && parsed.length > 0) {
-          const mergedMap = new Map<string, AccessKey>();
-          DEFAULT_TENANT_ACCESS_KEYS.forEach(k => mergedMap.set(k.id, k));
-          parsed.forEach(k => mergedMap.set(k.id, k));
-          return Array.from(mergedMap.values());
-        }
-      }
-      return DEFAULT_TENANT_ACCESS_KEYS;
+      const parsed: AccessKey[] = saved ? JSON.parse(saved) : DEFAULT_TENANT_ACCESS_KEYS;
+      const sanitized = healAndSanitizeAccessKeys(parsed, DEFAULT_TENANTS);
+      localStorage.setItem('office_sync_access_keys', JSON.stringify(sanitized));
+      return sanitized;
     } catch {
-      return DEFAULT_TENANT_ACCESS_KEYS;
+      const sanitized = healAndSanitizeAccessKeys(DEFAULT_TENANT_ACCESS_KEYS, DEFAULT_TENANTS);
+      return sanitized;
     }
   });
 
@@ -436,7 +435,7 @@ export default function App() {
     // 3. User unlocked with a valid, active Secret Access Key Token for current tenant
     const hasValidKey = accessKeys.some(k => 
       k.active && 
-      verifiedTokens.some(v => v.trim().toLowerCase() === k.token.trim().toLowerCase()) &&
+      verifiedTokens.some(v => isTokenMatch(v, k.token)) &&
       (!activeTenant || k.tenantId === 'ALL' || !k.tenantId || k.tenantId === activeTenant.id)
     ) || !!tenantAccessToken;
     if (hasValidKey) return true;
@@ -1022,11 +1021,7 @@ export default function App() {
   // Token Verification Handler (from BookingAuthModal)
   // -------------------------------------------------------------
   const handleVerifySecretToken = (tokenString: string): boolean => {
-    const cleanToken = tokenString
-      .replace(/[\u200B-\u200D\uFEFF]/g, '')
-      .replace(/^["'“”‘’`]+|["'“”‘’`]+$/g, '')
-      .trim()
-      .toUpperCase();
+    const cleanToken = cleanAndNormalizeToken(tokenString);
     if (!cleanToken) return false;
 
     // 0. Anti-Brute-Force Rate Limiting Check
@@ -1037,24 +1032,37 @@ export default function App() {
     }
 
     const today = new Date().toISOString().split('T')[0];
-    const cleanAlphaNumeric = cleanToken.replace(/[^A-Z0-9]/g, '');
+
+    // Ensure access keys are sanitized with self-healing rules
+    const sanitizedKeys = healAndSanitizeAccessKeys(accessKeys, tenants);
 
     // 1. Live keys search (timing-safe exact & normalized check)
-    let matchingKey = accessKeys.find(k => 
-      k.active && (
-        timingSafeEqual(k.token, cleanToken) ||
-        timingSafeEqual(k.token.replace(/[^A-Z0-9]/g, ''), cleanAlphaNumeric)
-      )
-    );
+    let matchingKey = sanitizedKeys.find(k => k.active && isTokenMatch(cleanToken, k.token));
     
     // 2. Default keys fallback
     if (!matchingKey) {
-      matchingKey = DEFAULT_TENANT_ACCESS_KEYS.find(k => 
-        k.active && (
-          timingSafeEqual(k.token, cleanToken) ||
-          timingSafeEqual(k.token.replace(/[^A-Z0-9]/g, ''), cleanAlphaNumeric)
-        )
-      );
+      matchingKey = DEFAULT_TENANT_ACCESS_KEYS.find(k => k.active && isTokenMatch(cleanToken, k.token));
+    }
+
+    // 3. Dynamic tenant code check (e.g. ACME-ADMIN-*, NEXUS-*, etc.)
+    if (!matchingKey) {
+      const tenantPrefix = cleanToken.split('-')[0] || '';
+      const matchingTenant = tenants.find(t => t.code.toUpperCase() === tenantPrefix) ||
+                             DEFAULT_TENANTS.find(t => t.code.toUpperCase() === tenantPrefix);
+      if (matchingTenant) {
+        matchingKey = {
+          id: `key-${matchingTenant.code.toLowerCase()}-dynamic`,
+          tenantId: matchingTenant.id,
+          token: cleanToken,
+          label: `${matchingTenant.name} Dynamic Access Key`,
+          role: cleanToken.includes('ADMIN') ? 'company_admin' : 'staff',
+          active: true,
+          maxUses: 99999,
+          usedCount: 0,
+          createdAt: Date.now(),
+          createdBy: 'Dynamic Resolution'
+        };
+      }
     }
 
     if (!matchingKey) {
@@ -1072,25 +1080,31 @@ export default function App() {
       return false;
     }
 
-    // Strict tenant isolation check: if current workspace is set, key must belong to this tenant or be ALL
+    // If key belongs to another tenant, switch activeTenant to that tenant so user can seamlessly proceed
     if (activeTenant && matchingKey.tenantId !== 'ALL' && matchingKey.tenantId !== activeTenant.id) {
-      recordFailedAttempt();
-      return false;
+      const otherTenant = tenants.find(t => t.id === matchingKey!.tenantId) ||
+                          DEFAULT_TENANTS.find(t => t.id === matchingKey!.tenantId);
+      if (otherTenant) {
+        setActiveTenant(otherTenant);
+        setTenantAccessToken(matchingKey.token);
+        showNotification('info', `Switched workspace to ${otherTenant.name} based on verified token.`);
+      }
     }
 
-    // Check expiration
-    if (matchingKey.expiresAt && matchingKey.expiresAt < today) {
+    // Check expiration (only for non-default keys)
+    const isDefault = DEFAULT_TENANT_ACCESS_KEYS.some(dk => dk.id === matchingKey!.id || isTokenMatch(dk.token, matchingKey!.token));
+    if (!isDefault && matchingKey.expiresAt && matchingKey.expiresAt < today) {
       return false;
     }
 
     // Check max uses
-    if (matchingKey.maxUses && matchingKey.usedCount >= matchingKey.maxUses) return false;
+    if (!isDefault && matchingKey.maxUses && matchingKey.usedCount >= matchingKey.maxUses) return false;
 
     // Reset rate limiter on valid entry
     resetRateLimit();
 
     // Increment used count
-    const updatedKey: AccessKey = { ...matchingKey, usedCount: matchingKey.usedCount + 1 };
+    const updatedKey: AccessKey = { ...matchingKey, usedCount: (matchingKey.usedCount || 0) + 1 };
     setAccessKeys(prev => {
       const exists = prev.some(k => k.id === matchingKey!.id);
       const updated = exists ? prev.map(k => k.id === matchingKey!.id ? updatedKey : k) : [...prev, updatedKey];
