@@ -273,6 +273,7 @@ export type RecurrenceFrequency =
 export interface RecurrenceConfig {
   startDate: string; // YYYY-MM-DD
   frequency: RecurrenceFrequency;
+  interval?: number; // e.g. every 1, 2, 3, 4 weeks/days
   repeatDays?: string[]; // e.g. ['Monday', 'Wednesday']
   endType: 'count' | 'until_date';
   occurrencesCount?: number; // e.g. 4, 8, 12, 24
@@ -326,6 +327,7 @@ export const generateRecurringDates = (config: RecurrenceConfig): string[] => {
   const {
     startDate,
     frequency,
+    interval = 1,
     repeatDays = [],
     endType,
     occurrencesCount = 4,
@@ -344,6 +346,7 @@ export const generateRecurringDates = (config: RecurrenceConfig): string[] => {
   const baseDayName = startObj.toLocaleDateString('en-US', { weekday: 'long' });
   const activeRepeatDays = repeatDays.length > 0 ? repeatDays : [baseDayName];
   const { nth: baseNth, weekdayIndex: baseWeekdayIndex } = getWeekdayOrdinalInfo(startDate);
+  const stepInterval = Math.max(1, interval || 1);
 
   switch (frequency) {
     case 'DAILY': {
@@ -351,7 +354,7 @@ export const generateRecurringDates = (config: RecurrenceConfig): string[] => {
       while (resultDates.length < targetCount) {
         if (endLimitDate && cur > endLimitDate) break;
         resultDates.push(formatDateToISO(cur));
-        cur.setDate(cur.getDate() + 1);
+        cur.setDate(cur.getDate() + stepInterval);
       }
       break;
     }
@@ -373,9 +376,13 @@ export const generateRecurringDates = (config: RecurrenceConfig): string[] => {
 
     case 'WEEKLY':
     case 'BIWEEKLY': {
-      const stepWeeks = frequency === 'BIWEEKLY' ? 2 : 1;
+      const stepWeeks = frequency === 'BIWEEKLY' ? (stepInterval * 2) : stepInterval;
       let curWeekStart = new Date(startObj);
-      // Align to Monday of start week or iterate relative to start
+      // Align to Monday of start week
+      const startDayOfWeek = startObj.getDay();
+      const diffToMonday = startDayOfWeek === 0 ? -6 : 1 - startDayOfWeek;
+      curWeekStart.setDate(startObj.getDate() + diffToMonday);
+
       let safetyCounter = 0;
 
       while (resultDates.length < targetCount && safetyCounter < 200) {

@@ -9,7 +9,7 @@ A real-time, multi-floor corporate meeting room booking system with interactive 
 - **Calendar Integrations**:
   - **Google Calendar Sync**: Native Google OAuth integration to push events directly to Google Calendar.
   - **Outlook / iCal Sync**: Export `.ics` calendar invitation files for Outlook and other calendar apps.
-- **Passkey Access & Admin Portal**: Secure passkey access for verified branch offices and an administrative portal (`admin123`) to configure rooms, amenities, capacities, and floor setups.
+- **Passkey Access & Admin Portal**: Secure passkey access for verified branch offices and an administrative portal to configure rooms, amenities, capacities, and floor setups.
 - **Simulated Notification Mailbox**: Built-in corporate email inbox simulating instant confirmation and cancellation alerts.
 - **Responsive Design**: Polished, mobile-friendly interface styled with Tailwind CSS.
 
@@ -71,12 +71,3 @@ npm run dev
 npm run build
 ```
 The compiled static assets will be in the `dist/` directory ready for deployment to any static web host.
-
----
-
-## 🔑 Default Credentials & Quick Start
-
-- **Office Passkeys**:
-  - Singapore HQ: `SG123`
-  - Silicon Valley Branch: `SV456`
-- **Admin Password**: `admin123`

@@ -23,7 +23,14 @@ interface AdminPanelProps {
   auditLogs: AuditLog[];
   adminEmail: string;
   isMasterAdmin?: boolean;
-  onSaveTenant?: (tenantData: Tenant, extraConfig?: { initialOffice?: { name: string; location: string; passkey: string; floors: number[] }; adminTokenRole?: 'company_admin' }) => void;
+  onSaveTenant?: (
+    tenantData: Tenant,
+    extraConfig?: {
+      initialOffice?: { name: string; location: string; passkey: string; floors: number[] };
+      initialAdminToken?: string;
+      adminTokenRole?: 'company_admin';
+    }
+  ) => void;
   onDeleteTenant?: (tenantId: string) => void;
   onGenerateTenantToken?: (tenantId: string, label: string, role: 'company_admin' | 'staff' | 'guest') => Promise<AccessKey>;
   onSwitchTenant?: (tenant: Tenant, token?: string) => void;

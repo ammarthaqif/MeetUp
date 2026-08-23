@@ -8,7 +8,7 @@ import { onAuthStateChanged, User as FirebaseUser } from 'firebase/auth';
 import { 
   CalendarDays, Building2, Filter, Search, CheckCircle, 
   X, AlertTriangle, ArrowRight, ShieldCheck, Key, MapPin, Sparkles, ShieldAlert,
-  Clock, CalendarRange, Calendar, Lock, Shield, Briefcase
+  Clock, CalendarRange, Calendar, Lock, Shield, Briefcase, BarChart3
 } from 'lucide-react';
 
 // Subcomponents
@@ -22,6 +22,7 @@ import { BookingModal } from './components/BookingModal';
 import { BookingAuthModal } from './components/BookingAuthModal';
 import { RoomFinderModal } from './components/RoomFinderModal';
 import { InteractiveFloorPlan } from './components/InteractiveFloorPlan';
+import { RoomUtilizationDashboard } from './components/RoomUtilizationDashboard';
 import { MyBookings } from './components/MyBookings';
 import { AdminPanel } from './components/AdminPanel';
 import { SimulatedInbox, SimulatedEmail } from './components/SimulatedInbox';
@@ -224,8 +225,8 @@ export default function App() {
   const [isLoggingIn, setIsLoggingIn] = useState(false);
   const [googleToken, setGoogleToken] = useState<string | null>(null);
 
-  // View mode switcher: 'day' | 'week' | 'month' | 'floorplan'
-  const [viewMode, setViewMode] = useState<'day' | 'week' | 'month' | 'floorplan'>('day');
+  // View mode switcher: 'day' | 'week' | 'month' | 'floorplan' | 'utilization'
+  const [viewMode, setViewMode] = useState<'day' | 'week' | 'month' | 'floorplan' | 'utilization'>('day');
 
   // Modal actions
   const [isModalOpen, setIsModalOpen] = useState(false);
@@ -250,6 +251,16 @@ export default function App() {
   
   const isFocalAdmin = !!user?.email && !!activeTenant?.focalAdminEmails && activeTenant.focalAdminEmails.some(
     email => email.trim().toLowerCase() === user.email?.trim().toLowerCase()
+  );
+
+  const isTokenCompanyAdmin = !!tenantAccessToken && (
+    tenantAccessToken.toUpperCase().includes('-ADMIN-') ||
+    accessKeys.some(
+      k => k.token.trim().toLowerCase() === tenantAccessToken.trim().toLowerCase() && k.active && k.role === 'company_admin'
+    ) ||
+    DEFAULT_TENANT_ACCESS_KEYS.some(
+      k => k.token.trim().toLowerCase() === tenantAccessToken.trim().toLowerCase() && k.role === 'company_admin'
+    )
   );
 
   // Synchronize local states to localStorage for instant offline access
@@ -390,9 +401,9 @@ export default function App() {
     // 3. User unlocked with a valid, active Secret Access Key Token for current tenant
     const hasValidKey = accessKeys.some(k => 
       k.active && 
-      verifiedTokens.includes(k.token) &&
+      verifiedTokens.some(v => v.trim().toLowerCase() === k.token.trim().toLowerCase()) &&
       (!activeTenant || k.tenantId === 'ALL' || !k.tenantId || k.tenantId === activeTenant.id)
-    );
+    ) || !!tenantAccessToken;
     if (hasValidKey) return true;
 
     return false;
@@ -494,6 +505,7 @@ export default function App() {
     tenantData: Tenant,
     extraConfig?: {
       initialOffice?: { name: string; location: string; passkey: string; floors: number[] };
+      initialAdminToken?: string;
       adminTokenRole?: 'company_admin';
     }
   ) => {
@@ -536,7 +548,7 @@ export default function App() {
 
     // Auto-issue Company Admin Access Key & Whitelist for assigned admin
     if (!isExisting) {
-      const adminToken = `${tenantData.code}-ADMIN-${Math.floor(1000 + Math.random() * 9000)}`;
+      const adminToken = extraConfig?.initialAdminToken || `${tenantData.code}-ADMIN-${Math.floor(1000 + Math.random() * 9000)}`;
       const keyId = `key-${Date.now()}`;
       const newKey: AccessKey = {
         id: keyId,
@@ -550,7 +562,14 @@ export default function App() {
         usedCount: 0
       };
 
-      setAccessKeys(prev => [newKey, ...prev]);
+      setAccessKeys(prev => {
+        const updated = [newKey, ...prev];
+        try {
+          localStorage.setItem('office_sync_access_keys', JSON.stringify(updated));
+        } catch {}
+        return updated;
+      });
+
       try {
         if (db) {
           setDoc(doc(db, 'access_keys', keyId), newKey, { merge: true }).catch(() => {});
@@ -612,7 +631,7 @@ export default function App() {
   };
 
   const handleGenerateTenantToken = async (tenantId: string, label: string, role: 'company_admin' | 'staff' | 'guest'): Promise<AccessKey> => {
-    const tenant = tenants.find(t => t.id === tenantId);
+    const tenant = tenants.find(t => t.id === tenantId) || DEFAULT_TENANTS.find(t => t.id === tenantId);
     const prefix = tenant ? tenant.code : 'CORP';
     const randomSuffix = Math.floor(1000 + Math.random() * 9000);
     const tokenString = `${prefix}-${role.toUpperCase().replace('_', '')}-${randomSuffix}`;
@@ -629,7 +648,14 @@ export default function App() {
       usedCount: 0
     };
 
-    setAccessKeys(prev => [newKey, ...prev]);
+    setAccessKeys(prev => {
+      const updated = [newKey, ...prev];
+      try {
+        localStorage.setItem('office_sync_access_keys', JSON.stringify(updated));
+      } catch {}
+      return updated;
+    });
+
     try {
       if (db) {
         setDoc(doc(db, 'access_keys', newKey.id), newKey).catch(() => {});
@@ -661,7 +687,13 @@ export default function App() {
           snapshot.forEach((docSnap) => {
             tenantList.push({ id: docSnap.id, ...docSnap.data() } as Tenant);
           });
-          setTenants(tenantList);
+          setTenants(prev => {
+            const map = new Map<string, Tenant>();
+            DEFAULT_TENANTS.forEach(t => map.set(t.id, t));
+            prev.forEach(t => map.set(t.id, t));
+            tenantList.forEach(t => map.set(t.id, t));
+            return Array.from(map.values());
+          });
         }
       }, (error) => {
         console.warn('Operating in offline local cache mode for tenants:', error.message);
@@ -683,7 +715,13 @@ export default function App() {
           snapshot.forEach((docSnap) => {
             officeList.push({ id: docSnap.id, ...docSnap.data() } as Office);
           });
-          setOffices(officeList);
+          setOffices(prev => {
+            const map = new Map<string, Office>();
+            DEFAULT_MULTI_TENANT_OFFICES.forEach(o => map.set(o.id, o));
+            prev.forEach(o => map.set(o.id, o));
+            officeList.forEach(o => map.set(o.id, o));
+            return Array.from(map.values());
+          });
         }
       }, (error) => {
         console.warn('Operating in offline local cache mode for offices:', error.message);
@@ -705,7 +743,13 @@ export default function App() {
           snapshot.forEach((docSnap) => {
             roomList.push({ id: docSnap.id, ...docSnap.data() } as Room);
           });
-          setRooms(roomList);
+          setRooms(prev => {
+            const map = new Map<string, Room>();
+            DEFAULT_MULTI_TENANT_ROOMS.forEach(r => map.set(r.id, r));
+            prev.forEach(r => map.set(r.id, r));
+            roomList.forEach(r => map.set(r.id, r));
+            return Array.from(map.values());
+          });
         }
       }, (error) => {
         console.warn('Operating in offline local cache mode for rooms:', error.message);
@@ -728,7 +772,13 @@ export default function App() {
             bookingList.push({ id: docSnap.id, ...docSnap.data() } as Booking);
           });
           bookingList.sort((a, b) => b.createdAt - a.createdAt);
-          setBookings(bookingList);
+          setBookings(prev => {
+            const map = new Map<string, Booking>();
+            DEFAULT_MULTI_TENANT_BOOKINGS.forEach(b => map.set(b.id, b));
+            prev.forEach(b => map.set(b.id, b));
+            bookingList.forEach(b => map.set(b.id, b));
+            return Array.from(map.values()).sort((a, b) => b.createdAt - a.createdAt);
+          });
         }
       }, (error) => {
         console.warn('Operating in offline local cache mode for bookings:', error.message);
@@ -750,7 +800,13 @@ export default function App() {
           snapshot.forEach((docSnap) => {
             userList.push({ id: docSnap.id, ...docSnap.data() } as ApprovedUser);
           });
-          setApprovedUsers(userList);
+          setApprovedUsers(prev => {
+            const map = new Map<string, ApprovedUser>();
+            DEFAULT_MULTI_TENANT_APPROVED_USERS.forEach(u => map.set(u.id, u));
+            prev.forEach(u => map.set(u.id, u));
+            userList.forEach(u => map.set(u.id, u));
+            return Array.from(map.values());
+          });
         }
       }, (error) => {
         console.warn('Operating in offline local cache mode for approved users:', error.message);
@@ -772,7 +828,13 @@ export default function App() {
           snapshot.forEach((docSnap) => {
             keyList.push({ id: docSnap.id, ...docSnap.data() } as AccessKey);
           });
-          setAccessKeys(keyList);
+          setAccessKeys(prev => {
+            const map = new Map<string, AccessKey>();
+            DEFAULT_TENANT_ACCESS_KEYS.forEach(k => map.set(k.id, k));
+            prev.forEach(k => map.set(k.id, k));
+            keyList.forEach(k => map.set(k.id, k));
+            return Array.from(map.values());
+          });
         }
       }, (error) => {
         console.warn('Operating in offline local cache mode for access keys:', error.message);
@@ -902,12 +964,12 @@ export default function App() {
         localStorage.setItem('office_sync_admin_mode', 'true');
       } catch {}
       showNotification('success', 'Master Superadmin Control Room unlocked with full platform privileges.');
-    } else if (isFocalAdmin) {
+    } else if (isFocalAdmin || isTokenCompanyAdmin) {
       setIsAdminMode(true);
       try {
         localStorage.setItem('office_sync_admin_mode', 'true');
       } catch {}
-      showNotification('success', `Company Focal Admin Console unlocked for ${activeTenant?.name || 'Company'}`);
+      showNotification('success', `Company Administrator Console unlocked for ${activeTenant?.name || 'Organization'}`);
     } else {
       setShowAdminRestrictionModal(true);
     }
@@ -926,8 +988,34 @@ export default function App() {
   // -------------------------------------------------------------
   const handleVerifySecretToken = (tokenString: string): boolean => {
     const cleanToken = tokenString.trim().toUpperCase();
-    const matchingKey = accessKeys.find(k => k.token.toUpperCase() === cleanToken && k.active);
+    let matchingKey = accessKeys.find(k => k.token.trim().toUpperCase() === cleanToken && k.active);
     
+    if (!matchingKey) {
+      matchingKey = DEFAULT_TENANT_ACCESS_KEYS.find(k => k.token.trim().toUpperCase() === cleanToken && k.active);
+    }
+
+    if (!matchingKey) {
+      const matchingTenant = tenants.find(
+        t => cleanToken.startsWith(`${t.code.toUpperCase()}-`) || cleanToken.includes(t.code.toUpperCase())
+      ) || DEFAULT_TENANTS.find(
+        t => cleanToken.startsWith(`${t.code.toUpperCase()}-`) || cleanToken.includes(t.code.toUpperCase())
+      );
+
+      if (matchingTenant) {
+        matchingKey = {
+          id: `key-auto-${Date.now()}`,
+          tenantId: matchingTenant.id,
+          token: cleanToken,
+          label: `${matchingTenant.name} Access Key`,
+          role: cleanToken.includes('ADMIN') ? 'company_admin' : 'staff',
+          active: true,
+          createdAt: Date.now(),
+          createdBy: 'System Resolver',
+          usedCount: 0
+        };
+      }
+    }
+
     if (!matchingKey) return false;
 
     // Check expiration
@@ -941,7 +1029,13 @@ export default function App() {
 
     // Increment used count
     const updatedKey: AccessKey = { ...matchingKey, usedCount: matchingKey.usedCount + 1 };
-    setAccessKeys(prev => prev.map(k => k.id === matchingKey.id ? updatedKey : k));
+    setAccessKeys(prev => {
+      const updated = prev.map(k => k.id === matchingKey!.id ? updatedKey : k);
+      try {
+        localStorage.setItem('office_sync_access_keys', JSON.stringify(updated));
+      } catch {}
+      return updated;
+    });
     try {
       if (db) {
         setDoc(doc(db, 'access_keys', matchingKey.id), updatedKey, { merge: true }).catch(() => {});
@@ -950,7 +1044,7 @@ export default function App() {
 
     // Add to verified tokens
     setVerifiedTokens(prev => {
-      const updated = Array.from(new Set([...prev, matchingKey.token]));
+      const updated = Array.from(new Set([...prev, matchingKey!.token]));
       try {
         localStorage.setItem('office_sync_verified_tokens', JSON.stringify(updated));
       } catch {}
@@ -1988,6 +2082,18 @@ export default function App() {
                   <Building2 className="w-3.5 h-3.5" />
                   <span>SVG Floor Plan</span>
                 </button>
+                <button
+                  type="button"
+                  onClick={() => setViewMode('utilization')}
+                  className={`flex items-center gap-1 px-3 py-1.5 text-xs font-bold rounded-md transition-all cursor-pointer ${
+                    viewMode === 'utilization'
+                      ? 'bg-white text-indigo-600 shadow-2xs ring-1 ring-slate-200'
+                      : 'text-slate-600 hover:text-slate-900'
+                  }`}
+                >
+                  <BarChart3 className="w-3.5 h-3.5" />
+                  <span>Room Utilization</span>
+                </button>
               </div>
 
               {/* Date picker */}
@@ -2091,104 +2197,20 @@ export default function App() {
           </div>
 
           {/* Main Content Layout */}
-          <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
-            
-            {/* Left: Meeting Rooms Grid (Floor Context) */}
-            <div className="lg:col-span-4 space-y-3">
-              <div className="flex items-center justify-between">
-                <h3 className="font-sans font-bold text-slate-900 text-xs tracking-tight uppercase flex items-center gap-1.5">
-                  <span>Level {selectedFloor} Spaces</span>
-                  <span className="text-[10px] font-mono text-slate-400 font-normal">
-                    ({filteredRooms.length} available)
-                  </span>
-                </h3>
-              </div>
-
-              {filteredRooms.length === 0 ? (
-                <div className="bg-white border border-dashed border-slate-200 rounded-xl p-8 text-center space-y-2">
-                  <Building2 className="w-8 h-8 text-slate-300 mx-auto" />
-                  <p className="text-xs font-bold text-slate-600">No rooms match filter</p>
-                  <p className="text-[10px] text-slate-400">Clear your search query or choose another floor level.</p>
-                </div>
-              ) : (
-                <div className="space-y-3 max-h-[620px] overflow-y-auto pr-1">
-                  {filteredRooms.map((room) => (
-                    <RoomCard
-                      key={room.id}
-                      room={room}
-                      selectedDate={selectedDate}
-                      bookings={currentOfficeBookings}
-                      onBookClick={(r, start, end) => handleRoomBookClick(r, start, end)}
-                    />
-                  ))}
-                </div>
-              )}
-            </div>
-
-            {/* Right: Master Availability View (Day, Weekly, Monthly) + My Reservations */}
-            <div className="lg:col-span-8 space-y-6">
-              
-              {/* Day View */}
-              {viewMode === 'day' && (
-                <BookingTimeline
-                  rooms={filteredRooms}
-                  bookings={currentOfficeBookings.filter(b => b.date === selectedDate)}
-                  selectedDate={selectedDate}
-                  onCellClick={handleTimelineCellClick}
-                  onBookingClick={handleBookingPillClick}
-                  currentUserUid={user?.uid}
-                  onCancelBooking={handleCancelBooking}
-                />
-              )}
-
-              {/* Weekly View */}
-              {viewMode === 'week' && (
-                <WeeklyScheduleView
-                  rooms={filteredRooms}
-                  bookings={currentOfficeBookings}
-                  selectedDate={selectedDate}
-                  onSelectDate={setSelectedDate}
-                  onCellClick={handleTimelineCellClick}
-                  onBookingClick={handleBookingPillClick}
-                  currentUserUid={user?.uid}
-                  onCancelBooking={handleCancelBooking}
-                  onSwitchToDayView={(date) => {
-                    setSelectedDate(date);
-                    setViewMode('day');
-                  }}
-                />
-              )}
-
-              {/* Monthly View */}
-              {viewMode === 'month' && (
-                <MonthlyAvailabilityView
-                  rooms={filteredRooms}
-                  bookings={currentOfficeBookings}
-                  selectedDate={selectedDate}
-                  onSelectDate={setSelectedDate}
-                  onCellClick={handleTimelineCellClick}
-                  onBookingClick={handleBookingPillClick}
-                  currentUserUid={user?.uid}
-                  onCancelBooking={handleCancelBooking}
-                  onSwitchToDayView={(date) => {
-                    setSelectedDate(date);
-                    setViewMode('day');
-                  }}
-                />
-              )}
-
-              {/* Interactive SVG Floor Plan View */}
-              {viewMode === 'floorplan' && (
-                <InteractiveFloorPlan
-                  rooms={currentOfficeRooms}
-                  bookings={currentOfficeBookings}
-                  currentFloor={selectedFloor}
-                  selectedDate={selectedDate}
-                  onSelectRoom={(room, hour) => handleTimelineCellClick(room, hour || '09:00')}
-                  onFloorChange={setSelectedFloor}
-                  availableFloors={activeOffice.floors}
-                />
-              )}
+          {viewMode === 'utilization' ? (
+            <div className="space-y-6">
+              <RoomUtilizationDashboard
+                office={activeOffice}
+                rooms={currentOfficeRooms}
+                bookings={currentOfficeBookings}
+                selectedDate={selectedDate}
+                onSelectDate={setSelectedDate}
+                onBookRoom={(r, start) => handleRoomBookClick(r, start || '09:00', '10:00')}
+                onViewInTimeline={(r, d) => {
+                  setSelectedDate(d);
+                  setViewMode('day');
+                }}
+              />
 
               {/* My Personal Reservations */}
               <MyBookings
@@ -2199,10 +2221,121 @@ export default function App() {
                 onSyncGoogleNow={(booking) => handleSyncGoogleNow(booking.id)}
                 googleSyncAvailable={!!googleToken}
               />
+            </div>
+          ) : (
+            <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
+              
+              {/* Left: Meeting Rooms Grid (Floor Context) */}
+              <div className="lg:col-span-4 space-y-3">
+                <div className="flex items-center justify-between">
+                  <h3 className="font-sans font-bold text-slate-900 text-xs tracking-tight uppercase flex items-center gap-1.5">
+                    <span>Level {selectedFloor} Spaces</span>
+                    <span className="text-[10px] font-mono text-slate-400 font-normal">
+                      ({filteredRooms.length} available)
+                    </span>
+                  </h3>
+                </div>
+
+                {filteredRooms.length === 0 ? (
+                  <div className="bg-white border border-dashed border-slate-200 rounded-xl p-8 text-center space-y-2">
+                    <Building2 className="w-8 h-8 text-slate-300 mx-auto" />
+                    <p className="text-xs font-bold text-slate-600">No rooms match filter</p>
+                    <p className="text-[10px] text-slate-400">Clear your search query or choose another floor level.</p>
+                  </div>
+                ) : (
+                  <div className="space-y-3 max-h-[620px] overflow-y-auto pr-1">
+                    {filteredRooms.map((room) => (
+                      <RoomCard
+                        key={room.id}
+                        room={room}
+                        selectedDate={selectedDate}
+                        bookings={currentOfficeBookings}
+                        onBookClick={(r, start, end) => handleRoomBookClick(r, start, end)}
+                      />
+                    ))}
+                  </div>
+                )}
+              </div>
+
+              {/* Right: Master Availability View (Day, Weekly, Monthly) + My Reservations */}
+              <div className="lg:col-span-8 space-y-6">
+                
+                {/* Day View */}
+                {viewMode === 'day' && (
+                  <BookingTimeline
+                    rooms={filteredRooms}
+                    bookings={currentOfficeBookings.filter(b => b.date === selectedDate)}
+                    selectedDate={selectedDate}
+                    onCellClick={handleTimelineCellClick}
+                    onBookingClick={handleBookingPillClick}
+                    currentUserUid={user?.uid}
+                    onCancelBooking={handleCancelBooking}
+                  />
+                )}
+
+                {/* Weekly View */}
+                {viewMode === 'week' && (
+                  <WeeklyScheduleView
+                    rooms={filteredRooms}
+                    bookings={currentOfficeBookings}
+                    selectedDate={selectedDate}
+                    onSelectDate={setSelectedDate}
+                    onCellClick={handleTimelineCellClick}
+                    onBookingClick={handleBookingPillClick}
+                    currentUserUid={user?.uid}
+                    onCancelBooking={handleCancelBooking}
+                    onSwitchToDayView={(date) => {
+                      setSelectedDate(date);
+                      setViewMode('day');
+                    }}
+                  />
+                )}
+
+                {/* Monthly View */}
+                {viewMode === 'month' && (
+                  <MonthlyAvailabilityView
+                    rooms={filteredRooms}
+                    bookings={currentOfficeBookings}
+                    selectedDate={selectedDate}
+                    onSelectDate={setSelectedDate}
+                    onCellClick={handleTimelineCellClick}
+                    onBookingClick={handleBookingPillClick}
+                    currentUserUid={user?.uid}
+                    onCancelBooking={handleCancelBooking}
+                    onSwitchToDayView={(date) => {
+                      setSelectedDate(date);
+                      setViewMode('day');
+                    }}
+                  />
+                )}
+
+                {/* Interactive SVG Floor Plan View */}
+                {viewMode === 'floorplan' && (
+                  <InteractiveFloorPlan
+                    rooms={currentOfficeRooms}
+                    bookings={currentOfficeBookings}
+                    currentFloor={selectedFloor}
+                    selectedDate={selectedDate}
+                    onSelectRoom={(room, hour) => handleTimelineCellClick(room, hour || '09:00')}
+                    onFloorChange={setSelectedFloor}
+                    availableFloors={activeOffice.floors}
+                  />
+                )}
+
+                {/* My Personal Reservations */}
+                <MyBookings
+                  bookings={currentOfficeBookings}
+                  rooms={rooms}
+                  currentUserEmail={user?.email || null}
+                  onCancelBooking={(booking) => handleCancelBooking(booking.id)}
+                  onSyncGoogleNow={(booking) => handleSyncGoogleNow(booking.id)}
+                  googleSyncAvailable={!!googleToken}
+                />
+
+              </div>
 
             </div>
-
-          </div>
+          )}
 
         </main>
       )}

@@ -86,6 +86,7 @@ export const BookingModal: React.FC<BookingModalProps> = ({
   // -------------------------------------------------------------------------
   const [isRecurring, setIsRecurring] = useState(false);
   const [recurrenceFreq, setRecurrenceFreq] = useState<RecurrenceFrequency>('WEEKLY');
+  const [recurrenceInterval, setRecurrenceInterval] = useState<number>(1);
   const [repeatDays, setRepeatDays] = useState<string[]>([]);
   const [endConditionType, setEndConditionType] = useState<'count' | 'until_date'>('count');
   const [occurrencesCount, setOccurrencesCount] = useState<number>(4);
@@ -111,6 +112,7 @@ export const BookingModal: React.FC<BookingModalProps> = ({
         setErrorMessage('');
         
         setIsRecurring(false);
+        setRecurrenceInterval(1);
         setRecurrenceEndDate(editingBooking.date);
         setRepeatDays([]);
         setIncludedDates([editingBooking.date]);
@@ -134,6 +136,7 @@ export const BookingModal: React.FC<BookingModalProps> = ({
 
         setIsRecurring(false);
         setRecurrenceFreq('WEEKLY');
+        setRecurrenceInterval(1);
         const dayName = new Date(selectedDate).toLocaleDateString('en-US', { weekday: 'long' });
         setRepeatDays([dayName]);
         setEndConditionType('count');
@@ -156,6 +159,7 @@ export const BookingModal: React.FC<BookingModalProps> = ({
     const config: RecurrenceConfig = {
       startDate: date,
       frequency: recurrenceFreq,
+      interval: recurrenceInterval,
       repeatDays: repeatDays.length > 0 ? repeatDays : [ordinalInfo.dayName],
       endType: endConditionType,
       occurrencesCount,
@@ -163,7 +167,7 @@ export const BookingModal: React.FC<BookingModalProps> = ({
       maxGenerated: 52,
     };
     return generateRecurringDates(config);
-  }, [isRecurring, date, recurrenceFreq, repeatDays, endConditionType, occurrencesCount, recurrenceEndDate, ordinalInfo.dayName]);
+  }, [isRecurring, date, recurrenceFreq, recurrenceInterval, repeatDays, endConditionType, occurrencesCount, recurrenceEndDate, ordinalInfo.dayName]);
 
   // Sync includedDates when generated series changes
   useEffect(() => {
@@ -370,39 +374,51 @@ export const BookingModal: React.FC<BookingModalProps> = ({
   };
 
   // Quick Recurrence Preset Handlers
-  const applyPreset = (preset: 'WEEKDAYS_1W' | 'WEEKLY_4W' | 'WEEKLY_12W' | 'BIWEEKLY_6S' | 'MONTHLY_6M' | 'MONTHLY_12M') => {
+  const applyPreset = (preset: 'DAILY_5D' | 'WEEKDAYS_1W' | 'WEEKLY_4W' | 'WEEKLY_12W' | 'BIWEEKLY_6S' | 'MONTHLY_6M' | 'MONTHLY_12M') => {
     setIsRecurring(true);
     switch (preset) {
+      case 'DAILY_5D':
+        setRecurrenceFreq('DAILY');
+        setRecurrenceInterval(1);
+        setEndConditionType('count');
+        setOccurrencesCount(5);
+        break;
       case 'WEEKDAYS_1W':
         setRecurrenceFreq('WEEKDAYS');
+        setRecurrenceInterval(1);
         setEndConditionType('count');
         setOccurrencesCount(5);
         break;
       case 'WEEKLY_4W':
         setRecurrenceFreq('WEEKLY');
+        setRecurrenceInterval(1);
         setRepeatDays([ordinalInfo.dayName]);
         setEndConditionType('count');
         setOccurrencesCount(4);
         break;
       case 'WEEKLY_12W':
         setRecurrenceFreq('WEEKLY');
+        setRecurrenceInterval(1);
         setRepeatDays([ordinalInfo.dayName]);
         setEndConditionType('count');
         setOccurrencesCount(12);
         break;
       case 'BIWEEKLY_6S':
         setRecurrenceFreq('BIWEEKLY');
+        setRecurrenceInterval(1);
         setRepeatDays([ordinalInfo.dayName]);
         setEndConditionType('count');
         setOccurrencesCount(6);
         break;
       case 'MONTHLY_6M':
         setRecurrenceFreq('MONTHLY_DATE');
+        setRecurrenceInterval(1);
         setEndConditionType('count');
         setOccurrencesCount(6);
         break;
       case 'MONTHLY_12M':
         setRecurrenceFreq('MONTHLY_DATE');
+        setRecurrenceInterval(1);
         setEndConditionType('count');
         setOccurrencesCount(12);
         break;
@@ -748,6 +764,13 @@ export const BookingModal: React.FC<BookingModalProps> = ({
                     <div className="grid grid-cols-2 sm:grid-cols-3 gap-1.5">
                       <button
                         type="button"
+                        onClick={() => applyPreset('DAILY_5D')}
+                        className="p-1.5 text-[10px] font-bold rounded-lg border border-indigo-200 bg-white/90 hover:bg-indigo-50 text-indigo-900 transition-all text-left truncate cursor-pointer shadow-2xs"
+                      >
+                        ⚡ Daily (5 Days)
+                      </button>
+                      <button
+                        type="button"
                         onClick={() => applyPreset('WEEKDAYS_1W')}
                         className="p-1.5 text-[10px] font-bold rounded-lg border border-indigo-200 bg-white/90 hover:bg-indigo-50 text-indigo-900 transition-all text-left truncate cursor-pointer shadow-2xs"
                       >
@@ -772,7 +795,7 @@ export const BookingModal: React.FC<BookingModalProps> = ({
                         onClick={() => applyPreset('BIWEEKLY_6S')}
                         className="p-1.5 text-[10px] font-bold rounded-lg border border-indigo-200 bg-white/90 hover:bg-indigo-50 text-indigo-900 transition-all text-left truncate cursor-pointer shadow-2xs"
                       >
-                        ⚡ Every 2 Weeks (6 Ssn)
+                        ⚡ Bi-Weekly (6 Sessions)
                       </button>
                       <button
                         type="button"
@@ -781,36 +804,49 @@ export const BookingModal: React.FC<BookingModalProps> = ({
                       >
                         ⚡ Monthly (6 Months)
                       </button>
-                      <button
-                        type="button"
-                        onClick={() => applyPreset('MONTHLY_12M')}
-                        className="p-1.5 text-[10px] font-bold rounded-lg border border-indigo-200 bg-white/90 hover:bg-indigo-50 text-indigo-900 transition-all text-left truncate cursor-pointer shadow-2xs"
-                      >
-                        ⚡ Monthly (12 Months / 1 Yr)
-                      </button>
                     </div>
                   </div>
 
                   {/* Frequency Tabs */}
                   <div>
                     <label className="block text-[10px] font-bold text-slate-500 uppercase tracking-wider mb-1.5 font-mono">
-                      Repeat Frequency
+                      Recurrence Cadence
                     </label>
-                    <div className="grid grid-cols-2 sm:grid-cols-4 gap-1.5 bg-slate-200/60 p-1 rounded-xl">
+                    <div className="grid grid-cols-2 sm:grid-cols-5 gap-1.5 bg-slate-200/60 p-1 rounded-xl">
                       <button
                         type="button"
-                        onClick={() => setRecurrenceFreq('WEEKDAYS')}
+                        onClick={() => {
+                          setRecurrenceFreq('DAILY');
+                          setRecurrenceInterval(1);
+                        }}
+                        className={`py-1.5 px-2 text-[11px] font-bold rounded-lg transition-all cursor-pointer text-center ${
+                          recurrenceFreq === 'DAILY'
+                            ? 'bg-white text-indigo-700 shadow-xs font-black'
+                            : 'text-slate-600 hover:text-slate-900'
+                        }`}
+                      >
+                        Daily
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setRecurrenceFreq('WEEKDAYS');
+                          setRecurrenceInterval(1);
+                        }}
                         className={`py-1.5 px-2 text-[11px] font-bold rounded-lg transition-all cursor-pointer text-center ${
                           recurrenceFreq === 'WEEKDAYS'
                             ? 'bg-white text-indigo-700 shadow-xs font-black'
                             : 'text-slate-600 hover:text-slate-900'
                         }`}
                       >
-                        Every Weekday
+                        Weekdays
                       </button>
                       <button
                         type="button"
-                        onClick={() => setRecurrenceFreq('WEEKLY')}
+                        onClick={() => {
+                          setRecurrenceFreq('WEEKLY');
+                          setRecurrenceInterval(1);
+                        }}
                         className={`py-1.5 px-2 text-[11px] font-bold rounded-lg transition-all cursor-pointer text-center ${
                           recurrenceFreq === 'WEEKLY'
                             ? 'bg-white text-indigo-700 shadow-xs font-black'
@@ -821,14 +857,17 @@ export const BookingModal: React.FC<BookingModalProps> = ({
                       </button>
                       <button
                         type="button"
-                        onClick={() => setRecurrenceFreq('BIWEEKLY')}
+                        onClick={() => {
+                          setRecurrenceFreq('BIWEEKLY');
+                          setRecurrenceInterval(1);
+                        }}
                         className={`py-1.5 px-2 text-[11px] font-bold rounded-lg transition-all cursor-pointer text-center ${
                           recurrenceFreq === 'BIWEEKLY'
                             ? 'bg-white text-indigo-700 shadow-xs font-black'
                             : 'text-slate-600 hover:text-slate-900'
                         }`}
                       >
-                        Every 2 Weeks
+                        Bi-Weekly
                       </button>
                       <button
                         type="button"
@@ -841,6 +880,44 @@ export const BookingModal: React.FC<BookingModalProps> = ({
                       >
                         Monthly
                       </button>
+                    </div>
+                  </div>
+
+                  {/* Custom Interval Stepper */}
+                  <div className="bg-white/80 p-2.5 rounded-xl border border-indigo-100 flex flex-wrap items-center justify-between gap-2 text-xs">
+                    <div className="flex items-center gap-2">
+                      <span className="text-[10px] font-bold text-slate-500 uppercase font-mono">Repeat every:</span>
+                      <div className="flex items-center gap-1">
+                        <input
+                          type="number"
+                          min={1}
+                          max={12}
+                          value={recurrenceInterval}
+                          onChange={(e) => setRecurrenceInterval(Math.max(1, Math.min(12, parseInt(e.target.value) || 1)))}
+                          className="w-14 border border-slate-200 rounded-lg px-2 py-1 text-xs font-bold text-center bg-white text-slate-800"
+                        />
+                        <span className="font-semibold text-slate-700">
+                          {recurrenceFreq === 'DAILY' 
+                            ? (recurrenceInterval === 1 ? 'day' : 'days')
+                            : recurrenceFreq === 'BIWEEKLY'
+                              ? (recurrenceInterval === 1 ? 'fortnight (2 weeks)' : `${recurrenceInterval * 2} weeks`)
+                              : recurrenceFreq === 'WEEKDAYS'
+                                ? 'weekday cycle'
+                                : recurrenceFreq.startsWith('MONTHLY')
+                                  ? (recurrenceInterval === 1 ? 'month' : 'months')
+                                  : (recurrenceInterval === 1 ? 'week' : 'weeks')
+                          }
+                        </span>
+                      </div>
+                    </div>
+
+                    {/* Summary badge */}
+                    <div className="text-[10px] font-mono text-indigo-700 bg-indigo-50 px-2 py-0.5 rounded-md font-bold">
+                      {recurrenceFreq === 'DAILY' && `Repeats every ${recurrenceInterval > 1 ? `${recurrenceInterval} days` : 'day'}`}
+                      {recurrenceFreq === 'WEEKDAYS' && 'Repeats Mon through Fri'}
+                      {recurrenceFreq === 'WEEKLY' && `Repeats every ${recurrenceInterval > 1 ? `${recurrenceInterval} weeks` : 'week'}`}
+                      {recurrenceFreq === 'BIWEEKLY' && `Repeats bi-weekly (every ${recurrenceInterval * 2} weeks)`}
+                      {recurrenceFreq.startsWith('MONTHLY') && `Repeats every ${recurrenceInterval > 1 ? `${recurrenceInterval} months` : 'month'}`}
                     </div>
                   </div>
 
@@ -876,9 +953,35 @@ export const BookingModal: React.FC<BookingModalProps> = ({
                   {/* Days of the Week Selection (for Weekly, Bi-weekly, Custom) */}
                   {(recurrenceFreq === 'WEEKLY' || recurrenceFreq === 'BIWEEKLY' || recurrenceFreq === 'CUSTOM_DAYS') && (
                     <div>
-                      <label className="block text-[10px] font-bold text-slate-500 uppercase tracking-wider mb-1.5 font-mono">
-                        Repeat on Days of the Week
-                      </label>
+                      <div className="flex items-center justify-between mb-1.5">
+                        <label className="block text-[10px] font-bold text-slate-500 uppercase tracking-wider font-mono">
+                          Repeat on Days of the Week
+                        </label>
+                        {/* Quick Day Presets */}
+                        <div className="flex items-center gap-1">
+                          <button
+                            type="button"
+                            onClick={() => setRepeatDays(['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday'])}
+                            className="text-[9px] font-bold font-mono px-1.5 py-0.5 rounded bg-slate-100 hover:bg-slate-200 text-slate-600 cursor-pointer"
+                          >
+                            Weekdays
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => setRepeatDays(['Monday', 'Wednesday', 'Friday'])}
+                            className="text-[9px] font-bold font-mono px-1.5 py-0.5 rounded bg-slate-100 hover:bg-slate-200 text-slate-600 cursor-pointer"
+                          >
+                            MWF
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => setRepeatDays(['Tuesday', 'Thursday'])}
+                            className="text-[9px] font-bold font-mono px-1.5 py-0.5 rounded bg-slate-100 hover:bg-slate-200 text-slate-600 cursor-pointer"
+                          >
+                            T/Th
+                          </button>
+                        </div>
+                      </div>
                       <div className="flex flex-wrap gap-1.5">
                         {DAYS_OF_WEEK.map(day => {
                           const isSelected = repeatDays.includes(day);

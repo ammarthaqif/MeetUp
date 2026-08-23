@@ -3,6 +3,7 @@ import {
   Building2, 
   Plus, 
   KeyRound, 
+  Key,
   Sparkles, 
   Layers, 
   ShieldCheck, 
@@ -36,7 +37,14 @@ interface AdminTenantsTabProps {
   offices: Office[];
   rooms: Room[];
   bookings: Booking[];
-  onSaveTenant: (tenantData: Tenant, extraConfig?: { initialOffice?: { name: string; location: string; passkey: string; floors: number[] }; adminTokenRole?: 'company_admin' }) => void;
+  onSaveTenant: (
+    tenantData: Tenant, 
+    extraConfig?: { 
+      initialOffice?: { name: string; location: string; passkey: string; floors: number[] }; 
+      initialAdminToken?: string;
+      adminTokenRole?: 'company_admin'; 
+    }
+  ) => void;
   onDeleteTenant: (tenantId: string) => void;
   onGenerateTenantToken: (tenantId: string, label: string, role: 'company_admin' | 'staff' | 'guest') => Promise<AccessKey>;
   onSwitchTenant: (tenant: Tenant, token?: string) => void;
@@ -268,21 +276,28 @@ export const AdminTenantsTab: React.FC<AdminTenantsTabProps> = ({
     };
 
     let extraConfig: any = undefined;
-    if (!editingTenant && createInitialOffice && initialOfficeName.trim()) {
-      const parsedFloors = initialOfficeFloors
-        .split(',')
-        .map(s => parseInt(s.trim()))
-        .filter(n => !isNaN(n))
-        .sort((a, b) => a - b);
+    const generatedAdminToken = `${finalCode}-ADMIN-${Math.floor(1000 + Math.random() * 9000)}`;
+
+    if (!editingTenant) {
+      const parsedFloors = createInitialOffice && initialOfficeName.trim()
+        ? initialOfficeFloors
+            .split(',')
+            .map(s => parseInt(s.trim()))
+            .filter(n => !isNaN(n))
+            .sort((a, b) => a - b)
+        : [1, 2, 3, 4];
 
       extraConfig = {
-        initialOffice: {
-          name: initialOfficeName.trim(),
-          location: initialOfficeLocation.trim() || 'Corporate HQ',
-          passkey: initialOfficePasskey.trim() || `${finalCode}2026`,
-          floors: parsedFloors.length > 0 ? parsedFloors : [1, 2, 3, 4],
-        },
-        adminTokenRole: 'company_admin'
+        initialAdminToken: generatedAdminToken,
+        adminTokenRole: 'company_admin',
+        ...(createInitialOffice && initialOfficeName.trim() ? {
+          initialOffice: {
+            name: initialOfficeName.trim(),
+            location: initialOfficeLocation.trim() || 'Corporate HQ',
+            passkey: initialOfficePasskey.trim() || `${finalCode}2026`,
+            floors: parsedFloors.length > 0 ? parsedFloors : [1, 2, 3, 4],
+          }
+        } : {})
       };
     }
 
@@ -296,7 +311,7 @@ export const AdminTenantsTab: React.FC<AdminTenantsTabProps> = ({
         tenant: tenantPayload,
         adminEmail: assignedAdminEmail.trim() || contactEmail.trim() || 'admin@company.com',
         adminName: assignedAdminName.trim() || 'Tenant Administrator',
-        token: `${finalCode}-ADMIN-${Math.floor(1000 + Math.random() * 9000)}`,
+        token: generatedAdminToken,
         officePasskey: createInitialOffice ? (initialOfficePasskey.trim() || `${finalCode}2026`) : undefined,
       });
     }
@@ -786,7 +801,44 @@ For support, contact Master Platform Administration via the Enterprise Support P
 
             {/* Generated Welcome Letter Content */}
             <div className="space-y-2">
-              <div className="flex items-center justify-between text-xs text-slate-400 font-semibold">
+              {/* Highlighted Admin Token Box */}
+              <div className="p-3.5 rounded-2xl bg-indigo-950/60 border border-indigo-500/40 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                <div className="flex items-center gap-3">
+                  <div className="w-9 h-9 rounded-xl bg-indigo-600 text-white flex items-center justify-center font-bold">
+                    <Key className="w-4 h-4" />
+                  </div>
+                  <div>
+                    <div className="text-[10px] text-indigo-300 font-bold uppercase tracking-wider">Company Admin Access Token</div>
+                    <div className="text-sm font-mono font-bold text-white mt-0.5 select-all">{welcomePackage.token}</div>
+                  </div>
+                </div>
+                <div className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      navigator.clipboard.writeText(welcomePackage.token);
+                      alert(`Copied Admin Token "${welcomePackage.token}" to clipboard!`);
+                    }}
+                    className="px-3 py-1.5 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-bold flex items-center gap-1.5 cursor-pointer shadow-sm"
+                  >
+                    <Copy className="w-3.5 h-3.5" />
+                    <span>Copy Token Only</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      onSwitchTenant(welcomePackage.tenant, welcomePackage.token);
+                      setWelcomePackage(null);
+                    }}
+                    className="px-3 py-1.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold flex items-center gap-1.5 cursor-pointer shadow-sm"
+                  >
+                    <Check className="w-3.5 h-3.5" />
+                    <span>Switch to this Tenant</span>
+                  </button>
+                </div>
+              </div>
+
+              <div className="flex items-center justify-between text-xs text-slate-400 font-semibold pt-1">
                 <span>Client Welcome Letter & Credentials:</span>
                 <button
                   type="button"
@@ -802,7 +854,7 @@ For support, contact Master Platform Administration via the Enterprise Support P
               </div>
               <textarea
                 readOnly
-                rows={9}
+                rows={8}
                 value={getWelcomeLetterText()}
                 className="w-full bg-slate-950 border border-slate-800 rounded-2xl p-4 text-xs font-mono text-slate-300 leading-relaxed resize-none focus:outline-none"
               />
