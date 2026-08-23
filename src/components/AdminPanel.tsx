@@ -46,6 +46,8 @@ interface AdminPanelProps {
   onGenerateAccessKey: (data: { label: string; expiresAt?: string; maxUses?: number }) => Promise<AccessKey>;
   onToggleAccessKey: (keyId: string) => Promise<void>;
   onRevokeAccessKey: (keyId: string) => Promise<void>;
+  onRegenerateAccessKey?: (keyId: string, options?: { newLabel?: string; newExpiresAt?: string; resetUses?: boolean; customToken?: string; role?: any }) => Promise<AccessKey>;
+  onRegenerateAllInvalidKeys?: () => Promise<number>;
   onClearAuditLogs: () => Promise<void>;
   onExitAdmin: () => void;
 }
@@ -77,6 +79,8 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
   onGenerateAccessKey,
   onToggleAccessKey,
   onRevokeAccessKey,
+  onRegenerateAccessKey,
+  onRegenerateAllInvalidKeys,
   onClearAuditLogs,
   onExitAdmin,
 }) => {
@@ -473,6 +477,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
           onSaveTenant={onSaveTenant}
           onDeleteTenant={onDeleteTenant}
           onGenerateTenantToken={onGenerateTenantToken}
+          onRegenerateAccessKey={onRegenerateAccessKey}
           onSwitchTenant={onSwitchTenant}
         />
       )}
@@ -1021,6 +1026,8 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
             onGenerateAccessKey={onGenerateAccessKey}
             onToggleAccessKey={onToggleAccessKey}
             onRevokeAccessKey={onRevokeAccessKey}
+            onRegenerateAccessKey={onRegenerateAccessKey}
+            onRegenerateAllInvalidKeys={onRegenerateAllInvalidKeys}
           />
         </div>
       )}

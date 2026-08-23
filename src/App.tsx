@@ -30,7 +30,7 @@ import { TenantPortalGate } from './components/TenantPortalGate';
 import { TenantSwitcherModal } from './components/TenantSwitcherModal';
 
 // Types and Utilities
-import { Booking, Room, Office, ApprovedUser, AccessKey, AuditLog, AuditActionType, Tenant } from './types';
+import { Booking, Room, Office, ApprovedUser, AccessKey, AuditLog, AuditActionType, Tenant, TenantRole } from './types';
 import { formatFriendlyDate, timeToMinutes } from './utils';
 import { 
   DEFAULT_TENANTS, 
@@ -1691,6 +1691,111 @@ export default function App() {
     showNotification('info', 'Token permanently revoked.');
   };
 
+  // Super Admin Token Regeneration Handler to Overwrite Invalid / Expired / Exhausted Tokens
+  const handleRegenerateAccessKey = async (
+    keyId: string,
+    options?: {
+      newLabel?: string;
+      role?: TenantRole;
+      newExpiresAt?: string;
+      resetUses?: boolean;
+      customToken?: string;
+    }
+  ): Promise<AccessKey> => {
+    const target = accessKeys.find(k => k.id === keyId);
+    if (!target) throw new Error('Target access token not found');
+
+    const tenant = tenants.find(t => t.id === target.tenantId) || DEFAULT_TENANTS.find(t => t.id === target.tenantId);
+    const prefix = tenant ? tenant.code : 'SEC';
+    const role = options?.role || target.role || 'staff';
+    const randomSuffix = Math.floor(1000 + Math.random() * 9000);
+    const randomHex = Math.random().toString(36).substring(2, 6).toUpperCase();
+
+    let newToken = options?.customToken?.trim().toUpperCase();
+    if (!newToken) {
+      if (target.tenantId && target.tenantId !== 'ALL') {
+        newToken = `${prefix}-${role.toUpperCase().replace('_', '')}-${randomSuffix}`;
+      } else {
+        newToken = `SEC-${randomHex}-${randomSuffix}`;
+      }
+    }
+
+    const oldToken = target.token;
+    const updatedKey: AccessKey = {
+      ...target,
+      token: newToken,
+      role,
+      label: options?.newLabel || target.label,
+      active: true,
+      usedCount: options?.resetUses !== false ? 0 : target.usedCount,
+      expiresAt: options?.newExpiresAt !== undefined ? options.newExpiresAt : target.expiresAt,
+      createdAt: Date.now(),
+      createdBy: user?.email || ADMIN_EMAIL,
+    };
+
+    setAccessKeys(prev => {
+      const updated = prev.map(k => k.id === keyId ? updatedKey : k);
+      try {
+        localStorage.setItem('office_sync_access_keys', JSON.stringify(updated));
+      } catch {}
+      return updated;
+    });
+
+    try {
+      if (db) {
+        await setDoc(doc(db, 'access_keys', keyId), updatedKey);
+      }
+    } catch {}
+
+    // If current session was unlocked with the old token, seamlessly migrate
+    if (tenantAccessToken.trim().toLowerCase() === oldToken.trim().toLowerCase()) {
+      setTenantAccessToken(newToken);
+      try {
+        localStorage.setItem('office_sync_tenant_token', newToken);
+      } catch {}
+    }
+
+    setVerifiedTokens(prev => {
+      const filtered = prev.filter(t => t.trim().toLowerCase() !== oldToken.trim().toLowerCase());
+      const updated = Array.from(new Set([...filtered, newToken]));
+      try {
+        localStorage.setItem('office_sync_verified_tokens', JSON.stringify(updated));
+      } catch {}
+      return updated;
+    });
+
+    logActivity({
+      action: 'ACCESS_KEY_GENERATED',
+      details: `Super Admin regenerated and overwritten token for "${updatedKey.label}". New token: ${newToken} (Replaced invalid/old token: ${oldToken})`,
+      tenantId: target.tenantId
+    });
+
+    showNotification('success', `Regenerated token for "${updatedKey.label}": ${newToken}`);
+    return updatedKey;
+  };
+
+  const handleRegenerateAllInvalidKeys = async (): Promise<number> => {
+    const today = new Date().toISOString().split('T')[0];
+    const invalidKeys = accessKeys.filter(k => {
+      const isInactive = !k.active;
+      const isExpired = !!k.expiresAt && k.expiresAt < today;
+      const isExhausted = !!k.maxUses && k.usedCount >= k.maxUses;
+      return isInactive || isExpired || isExhausted;
+    });
+
+    if (invalidKeys.length === 0) {
+      showNotification('info', 'No invalid or expired tokens found.');
+      return 0;
+    }
+
+    for (const key of invalidKeys) {
+      await handleRegenerateAccessKey(key.id, { resetUses: true });
+    }
+
+    showNotification('success', `Successfully regenerated & restored ${invalidKeys.length} invalid access tokens.`);
+    return invalidKeys.length;
+  };
+
   const handleClearAuditLogs = async () => {
     setAuditLogs([]);
     try {
@@ -1937,6 +2042,8 @@ export default function App() {
             onGenerateAccessKey={handleGenerateAccessKey}
             onToggleAccessKey={handleToggleAccessKey}
             onRevokeAccessKey={handleRevokeAccessKey}
+            onRegenerateAccessKey={handleRegenerateAccessKey}
+            onRegenerateAllInvalidKeys={handleRegenerateAllInvalidKeys}
             onClearAuditLogs={handleClearAuditLogs}
             onExitAdmin={handleExitAdminMode}
           />

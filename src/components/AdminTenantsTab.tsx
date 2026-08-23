@@ -26,7 +26,9 @@ import {
   Briefcase,
   CheckCircle,
   MapPin,
-  Clock
+  Clock,
+  RefreshCw,
+  AlertCircle
 } from 'lucide-react';
 import { Tenant, AccessKey, Office, Room, Booking, TenantPlan, SubscriptionStatus } from '../types';
 
@@ -47,6 +49,7 @@ interface AdminTenantsTabProps {
   ) => void;
   onDeleteTenant: (tenantId: string) => void;
   onGenerateTenantToken: (tenantId: string, label: string, role: 'company_admin' | 'staff' | 'guest') => Promise<AccessKey>;
+  onRegenerateAccessKey?: (keyId: string, options?: { newLabel?: string; newExpiresAt?: string; resetUses?: boolean; customToken?: string; role?: any }) => Promise<AccessKey>;
   onSwitchTenant: (tenant: Tenant, token?: string) => void;
 }
 
@@ -60,6 +63,7 @@ export const AdminTenantsTab: React.FC<AdminTenantsTabProps> = ({
   onSaveTenant,
   onDeleteTenant,
   onGenerateTenantToken,
+  onRegenerateAccessKey,
   onSwitchTenant,
 }) => {
   const [isAddingTenant, setIsAddingTenant] = useState(false);
@@ -106,6 +110,29 @@ export const AdminTenantsTab: React.FC<AdminTenantsTabProps> = ({
   const [newTokenLabel, setNewTokenLabel] = useState('Executive Staff Token');
   const [newTokenRole, setNewTokenRole] = useState<'company_admin' | 'staff' | 'guest'>('staff');
   const [copiedToken, setCopiedToken] = useState<string | null>(null);
+  const [regeneratingKeyId, setRegeneratingKeyId] = useState<string | null>(null);
+  const [regenSuccessModal, setRegenSuccessModal] = useState<{ key: AccessKey; tenantName: string } | null>(null);
+
+  const todayStr = new Date().toISOString().split('T')[0];
+
+  const handleRegenerateTenantKey = async (key: AccessKey, tenant: Tenant) => {
+    if (!onRegenerateAccessKey) return;
+    setRegeneratingKeyId(key.id);
+    try {
+      const updated = await onRegenerateAccessKey(key.id, {
+        resetUses: true,
+        role: key.role || 'staff'
+      });
+      setRegenSuccessModal({
+        key: updated,
+        tenantName: tenant.name
+      });
+    } catch {
+      alert('Failed to regenerate access key.');
+    } finally {
+      setRegeneratingKeyId(null);
+    }
+  };
 
   // Welcome Kit Modal State
   const [welcomePackage, setWelcomePackage] = useState<{
@@ -1129,31 +1156,75 @@ For support, contact Master Platform Administration via the Enterprise Support P
                     </div>
                   )}
 
-                  {tenantTokens.map(k => (
-                    <div
-                      key={k.id}
-                      className="flex items-center justify-between p-2 rounded-xl bg-slate-900/50 border border-slate-800/60 text-xs"
-                    >
-                      <div className="flex items-center gap-2">
-                        <KeyRound className="w-3.5 h-3.5 text-indigo-400" />
-                        <div>
-                          <span className="font-mono text-slate-200">{k.token}</span>
-                          <span className="text-[10px] text-slate-500 ml-2">({k.label} &bull; {k.role || 'staff'})</span>
+                  {tenantTokens.map(k => {
+                    const isInactive = !k.active;
+                    const isExpired = k.expiresAt && k.expiresAt < todayStr;
+                    const isExhausted = k.maxUses && k.usedCount >= k.maxUses;
+                    const isInvalid = isInactive || isExpired || isExhausted;
+                    const isRegenerating = regeneratingKeyId === k.id;
+
+                    return (
+                      <div
+                        key={k.id}
+                        className={`flex flex-col sm:flex-row sm:items-center justify-between p-2.5 rounded-xl border text-xs gap-2 ${
+                          isInvalid
+                            ? 'bg-amber-950/20 border-amber-500/30'
+                            : 'bg-slate-900/50 border-slate-800/60'
+                        }`}
+                      >
+                        <div className="flex items-center gap-2 min-w-0">
+                          <KeyRound className={`w-3.5 h-3.5 shrink-0 ${isInvalid ? 'text-amber-400' : 'text-indigo-400'}`} />
+                          <div className="min-w-0">
+                            <div className="flex items-center gap-1.5 flex-wrap">
+                              <span className={`font-mono font-bold ${isInvalid ? 'text-rose-300 line-through' : 'text-slate-200'}`}>
+                                {k.token}
+                              </span>
+                              {isInvalid && (
+                                <span className="text-[9px] px-1.5 py-0.2 rounded bg-amber-500/20 text-amber-300 border border-amber-500/30 font-bold uppercase">
+                                  {isInactive ? 'Inactive' : isExpired ? 'Expired' : 'Max Uses'}
+                                </span>
+                              )}
+                            </div>
+                            <div className="text-[10px] text-slate-400">
+                              <span>{k.label}</span>
+                              <span className="text-slate-600 mx-1">&bull;</span>
+                              <span className="uppercase text-indigo-300">{k.role || 'staff'}</span>
+                              {k.expiresAt && <span className="text-slate-500 ml-1.5">(Exp: {k.expiresAt})</span>}
+                            </div>
+                          </div>
+                        </div>
+
+                        <div className="flex items-center gap-1.5 shrink-0 self-end sm:self-auto">
+                          {/* Super Admin Token Regenerate Action */}
+                          {onRegenerateAccessKey && (
+                            <button
+                              type="button"
+                              onClick={() => handleRegenerateTenantKey(k, t)}
+                              disabled={isRegenerating}
+                              className="px-2 py-1 rounded-md bg-indigo-950/80 hover:bg-indigo-900 text-indigo-300 hover:text-white border border-indigo-500/30 transition-colors cursor-pointer text-[10px] font-bold flex items-center gap-1 disabled:opacity-50"
+                              title="Regenerate & overwrite this token with a fresh valid token"
+                            >
+                              <RefreshCw className={`w-3 h-3 ${isRegenerating ? 'animate-spin' : ''}`} />
+                              <span>{isRegenerating ? 'Regenerating...' : 'Regenerate'}</span>
+                            </button>
+                          )}
+
+                          <button
+                            type="button"
+                            onClick={() => handleCopy(k.token)}
+                            className="p-1 rounded-md hover:bg-slate-800 text-slate-400 hover:text-white transition-colors cursor-pointer"
+                            title="Copy Token"
+                          >
+                            {copiedToken === k.token ? (
+                              <Check className="w-3.5 h-3.5 text-emerald-400" />
+                            ) : (
+                              <span className="text-[10px] text-indigo-400 font-semibold">Copy</span>
+                            )}
+                          </button>
                         </div>
                       </div>
-                      <button
-                        onClick={() => handleCopy(k.token)}
-                        className="p-1 rounded-md hover:bg-slate-800 text-slate-400 hover:text-white transition-colors cursor-pointer"
-                        title="Copy Token"
-                      >
-                        {copiedToken === k.token ? (
-                          <Check className="w-3.5 h-3.5 text-emerald-400" />
-                        ) : (
-                          <span className="text-[10px] text-indigo-400 font-semibold">Copy</span>
-                        )}
-                      </button>
-                    </div>
-                  ))}
+                    );
+                  })}
                 </div>
               </div>
 
@@ -1183,6 +1254,65 @@ For support, contact Master Platform Administration via the Enterprise Support P
           );
         })}
       </div>
+
+      {/* Super Admin Token Regenerated Modal */}
+      {regenSuccessModal && (
+        <div className="fixed inset-0 bg-slate-950/80 backdrop-blur-xs z-50 flex items-center justify-center p-4">
+          <div className="bg-slate-900 border border-slate-700/80 rounded-2xl shadow-2xl p-6 max-w-md w-full space-y-4 animate-in fade-in zoom-in-95 duration-150">
+            <div className="flex items-center justify-between border-b border-slate-800 pb-3">
+              <div className="flex items-center gap-2">
+                <div className="w-8 h-8 rounded-xl bg-emerald-500/20 border border-emerald-500/30 flex items-center justify-center text-emerald-400">
+                  <CheckCircle2 className="w-4 h-4" />
+                </div>
+                <div>
+                  <h4 className="font-bold text-white text-sm tracking-tight">Access Token Overwritten</h4>
+                  <p className="text-[11px] text-slate-400">{regenSuccessModal.tenantName}</p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setRegenSuccessModal(null)}
+                className="p-1 text-slate-400 hover:text-white rounded-lg cursor-pointer"
+              >
+                ✕
+              </button>
+            </div>
+
+            <div className="p-4 rounded-xl bg-slate-950 border border-slate-800 space-y-2 text-center">
+              <p className="text-xs text-slate-300">
+                The invalid token has been overwritten with a fresh, active token:
+              </p>
+              <div className="p-3 bg-slate-900 rounded-xl border border-indigo-500/30 flex items-center justify-between gap-2 mt-2">
+                <code className="font-mono text-sm font-bold text-indigo-300 select-all">
+                  {regenSuccessModal.key.token}
+                </code>
+                <button
+                  type="button"
+                  onClick={() => handleCopy(regenSuccessModal.key.token)}
+                  className="px-3 py-1 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-bold flex items-center gap-1 cursor-pointer"
+                >
+                  {copiedToken === regenSuccessModal.key.token ? (
+                    <Check className="w-3.5 h-3.5 text-emerald-300" />
+                  ) : (
+                    <Copy className="w-3.5 h-3.5" />
+                  )}
+                  <span>{copiedToken === regenSuccessModal.key.token ? 'Copied' : 'Copy'}</span>
+                </button>
+              </div>
+            </div>
+
+            <div className="flex justify-end pt-2">
+              <button
+                type="button"
+                onClick={() => setRegenSuccessModal(null)}
+                className="px-5 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-bold uppercase transition-colors shadow-xs cursor-pointer"
+              >
+                Done
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };

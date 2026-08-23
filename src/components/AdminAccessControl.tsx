@@ -19,6 +19,8 @@ interface AdminAccessControlProps {
   onGenerateAccessKey: (data: { label: string; expiresAt?: string; maxUses?: number }) => Promise<AccessKey>;
   onToggleAccessKey: (keyId: string) => Promise<void>;
   onRevokeAccessKey: (keyId: string) => Promise<void>;
+  onRegenerateAccessKey?: (keyId: string, options?: { newLabel?: string; newExpiresAt?: string; resetUses?: boolean; customToken?: string; role?: any }) => Promise<AccessKey>;
+  onRegenerateAllInvalidKeys?: () => Promise<number>;
 }
 
 export const AdminAccessControl: React.FC<AdminAccessControlProps> = ({
@@ -34,6 +36,8 @@ export const AdminAccessControl: React.FC<AdminAccessControlProps> = ({
   onGenerateAccessKey,
   onToggleAccessKey,
   onRevokeAccessKey,
+  onRegenerateAccessKey,
+  onRegenerateAllInvalidKeys,
 }) => {
   const [subTab, setSubTab] = useState<'focals' | 'users' | 'keys'>('focals');
   
@@ -60,6 +64,16 @@ export const AdminAccessControl: React.FC<AdminAccessControlProps> = ({
   const [isGeneratingKey, setIsGeneratingKey] = useState(false);
   const [copiedKeyId, setCopiedKeyId] = useState<string | null>(null);
   const [keySearch, setKeySearch] = useState('');
+
+  // Regeneration state
+  const [regenTargetKey, setRegenTargetKey] = useState<AccessKey | null>(null);
+  const [regenResetUses, setRegenResetUses] = useState(true);
+  const [regenExpiresAt, setRegenExpiresAt] = useState('');
+  const [regenRole, setRegenRole] = useState<'company_admin' | 'staff' | 'guest'>('staff');
+  const [regenCustomToken, setRegenCustomToken] = useState('');
+  const [isRegenerating, setIsRegenerating] = useState(false);
+  const [isBulkRegenerating, setIsBulkRegenerating] = useState(false);
+  const [regenSuccessKey, setRegenSuccessKey] = useState<AccessKey | null>(null);
 
   // Notification state
   const [notification, setNotification] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
@@ -197,10 +211,71 @@ export const AdminAccessControl: React.FC<AdminAccessControlProps> = ({
     (u.department && u.department.toLowerCase().includes(userSearch.toLowerCase()))
   );
 
+  const today = new Date().toISOString().split('T')[0];
+
+  const getKeyStatus = (key: AccessKey) => {
+    if (!key.active) {
+      return { status: 'revoked', label: 'Revoked / Inactive', isInvalid: true, color: 'rose' };
+    }
+    if (key.expiresAt && key.expiresAt < today) {
+      return { status: 'expired', label: `Expired (${key.expiresAt})`, isInvalid: true, color: 'amber' };
+    }
+    if (key.maxUses && key.usedCount >= key.maxUses) {
+      return { status: 'exhausted', label: `Limit Reached (${key.usedCount}/${key.maxUses})`, isInvalid: true, color: 'purple' };
+    }
+    return { status: 'active', label: 'Active', isInvalid: false, color: 'emerald' };
+  };
+
+  const invalidKeys = accessKeys.filter(k => getKeyStatus(k).isInvalid);
+
   const filteredKeys = accessKeys.filter(k =>
     k.label.toLowerCase().includes(keySearch.toLowerCase()) ||
-    k.token.toLowerCase().includes(keySearch.toLowerCase())
+    k.token.toLowerCase().includes(keySearch.toLowerCase()) ||
+    (k.role && k.role.toLowerCase().includes(keySearch.toLowerCase()))
   );
+
+  const handleOpenRegenModal = (key: AccessKey) => {
+    setRegenTargetKey(key);
+    setRegenExpiresAt(key.expiresAt || '');
+    setRegenRole((key.role as any) || 'staff');
+    setRegenResetUses(true);
+    setRegenCustomToken('');
+    setRegenSuccessKey(null);
+  };
+
+  const handleConfirmRegenerate = async (e?: React.FormEvent) => {
+    if (e) e.preventDefault();
+    if (!regenTargetKey || !onRegenerateAccessKey) return;
+
+    setIsRegenerating(true);
+    try {
+      const updated = await onRegenerateAccessKey(regenTargetKey.id, {
+        newExpiresAt: regenExpiresAt || undefined,
+        resetUses: regenResetUses,
+        role: regenRole,
+        customToken: regenCustomToken.trim() || undefined
+      });
+      setRegenSuccessKey(updated);
+      showNotice('success', `Regenerated and overwritten token: ${updated.token}`);
+    } catch {
+      showNotice('error', 'Failed to regenerate token.');
+    } finally {
+      setIsRegenerating(false);
+    }
+  };
+
+  const handleBatchRegenerateInvalid = async () => {
+    if (!onRegenerateAllInvalidKeys) return;
+    setIsBulkRegenerating(true);
+    try {
+      const count = await onRegenerateAllInvalidKeys();
+      showNotice('success', `Regenerated and restored ${count} invalid access tokens.`);
+    } catch {
+      showNotice('error', 'Failed to regenerate invalid tokens.');
+    } finally {
+      setIsBulkRegenerating(false);
+    }
+  };
 
   return (
     <div className="space-y-6">
@@ -616,6 +691,39 @@ export const AdminAccessControl: React.FC<AdminAccessControlProps> = ({
 
           {/* Tokens List */}
           <div className="lg:col-span-7 space-y-3">
+            
+            {/* Super Admin Invalid Tokens Banner */}
+            {invalidKeys.length > 0 && (
+              <div className="p-3.5 rounded-2xl bg-amber-500/10 border border-amber-500/30 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 text-xs">
+                <div className="flex items-start gap-2.5">
+                  <AlertCircle className="w-4 h-4 text-amber-500 shrink-0 mt-0.5" />
+                  <div>
+                    <div className="font-bold text-amber-900 flex items-center gap-1.5">
+                      <span>{invalidKeys.length} Invalid or Expired Token{invalidKeys.length > 1 ? 's' : ''} Detected</span>
+                      <span className="text-[10px] px-1.5 py-0.2 rounded-full bg-amber-100 text-amber-800 font-mono font-bold">
+                        Requires Super Admin Action
+                      </span>
+                    </div>
+                    <p className="text-[11px] text-amber-700 mt-0.5">
+                      Expired, revoked, or maxed-out tokens prevent team members from booking. You can overwrite them with new valid tokens.
+                    </p>
+                  </div>
+                </div>
+
+                {onRegenerateAllInvalidKeys && (
+                  <button
+                    type="button"
+                    onClick={handleBatchRegenerateInvalid}
+                    disabled={isBulkRegenerating}
+                    className="px-3 py-1.5 rounded-xl bg-amber-600 hover:bg-amber-500 text-white font-bold text-[11px] uppercase tracking-wider flex items-center gap-1.5 transition-all shadow-xs cursor-pointer disabled:opacity-50 shrink-0"
+                  >
+                    <RefreshCw className={`w-3.5 h-3.5 ${isBulkRegenerating ? 'animate-spin' : ''}`} />
+                    <span>{isBulkRegenerating ? 'Overwriting...' : 'Regenerate All Invalid'}</span>
+                  </button>
+                )}
+              </div>
+            )}
+
             <div className="flex items-center justify-between gap-3">
               <div className="relative flex-1">
                 <Search className="w-3.5 h-3.5 text-slate-400 absolute left-3 top-2.5" />
@@ -639,75 +747,250 @@ export const AdminAccessControl: React.FC<AdminAccessControlProps> = ({
                 <p className="text-[11px] text-slate-400">Generate a token to provide secure guest or department access.</p>
               </div>
             ) : (
-              <div className="space-y-2.5 max-h-[420px] overflow-y-auto pr-1">
-                {filteredKeys.map((key) => (
-                  <div
-                    key={key.id}
-                    className={`bg-white border rounded-xl p-3.5 transition-all shadow-2xs ${
-                      key.active ? 'border-slate-200' : 'border-rose-200 bg-rose-50/20'
-                    }`}
-                  >
-                    <div className="flex items-start justify-between gap-3">
-                      <div className="space-y-1 min-w-0 flex-1">
-                        <div className="flex items-center gap-2 flex-wrap">
-                          <span className="text-xs font-black text-slate-900">{key.label}</span>
-                          <span className={`text-[9px] font-mono px-2 py-0.5 rounded font-black uppercase ${
-                            key.active ? 'bg-emerald-100 text-emerald-800' : 'bg-rose-100 text-rose-800'
-                          }`}>
-                            {key.active ? 'Active' : 'Revoked'}
-                          </span>
+              <div className="space-y-2.5 max-h-[440px] overflow-y-auto pr-1">
+                {filteredKeys.map((key) => {
+                  const statusInfo = getKeyStatus(key);
+
+                  return (
+                    <div
+                      key={key.id}
+                      className={`bg-white border rounded-xl p-3.5 transition-all shadow-2xs ${
+                        statusInfo.isInvalid ? 'border-amber-300/80 bg-amber-50/20' : 'border-slate-200'
+                      }`}
+                    >
+                      <div className="flex items-start justify-between gap-3">
+                        <div className="space-y-1 min-w-0 flex-1">
+                          <div className="flex items-center gap-2 flex-wrap">
+                            <span className="text-xs font-black text-slate-900">{key.label}</span>
+                            <span className={`text-[9px] font-mono px-2 py-0.5 rounded font-black uppercase ${
+                              statusInfo.color === 'emerald' ? 'bg-emerald-100 text-emerald-800' :
+                              statusInfo.color === 'rose' ? 'bg-rose-100 text-rose-800' :
+                              statusInfo.color === 'purple' ? 'bg-purple-100 text-purple-800' :
+                              'bg-amber-100 text-amber-800'
+                            }`}>
+                              {statusInfo.label}
+                            </span>
+                            {key.role && (
+                              <span className="text-[9px] font-mono px-1.5 py-0.2 rounded bg-indigo-50 text-indigo-700 border border-indigo-200 font-bold uppercase">
+                                {key.role}
+                              </span>
+                            )}
+                          </div>
+
+                          {/* Token value & Copy */}
+                          <div className="flex items-center gap-2 pt-1 flex-wrap">
+                            <code className={`font-mono text-xs font-bold px-2.5 py-1 rounded-lg border select-all ${
+                              statusInfo.isInvalid
+                                ? 'bg-rose-50 text-rose-800 line-through border-rose-200'
+                                : 'bg-slate-100 text-slate-900 border-slate-200'
+                            }`}>
+                              {key.token}
+                            </code>
+                            <button
+                              type="button"
+                              onClick={() => copyToClipboard(key.token, key.id)}
+                              className="text-indigo-600 hover:text-indigo-800 p-1 rounded-lg hover:bg-indigo-50 transition-colors cursor-pointer"
+                              title="Copy Token"
+                            >
+                              {copiedKeyId === key.id ? <Check className="w-4 h-4 text-emerald-600" /> : <Copy className="w-4 h-4" />}
+                            </button>
+
+                            {statusInfo.isInvalid && (
+                              <span className="text-[10px] text-rose-600 font-semibold flex items-center gap-1">
+                                <AlertCircle className="w-3 h-3" />
+                                Invalid for access
+                              </span>
+                            )}
+                          </div>
+
+                          <div className="flex items-center gap-3 text-[10px] text-slate-500 font-mono pt-1 flex-wrap">
+                            <span>Uses: {key.usedCount}{key.maxUses ? ` / ${key.maxUses}` : ''}</span>
+                            {key.expiresAt && <span>Expires: {key.expiresAt}</span>}
+                            <span>Created by {key.createdBy}</span>
+                          </div>
                         </div>
 
-                        {/* Token value & Copy */}
-                        <div className="flex items-center gap-2 pt-1">
-                          <code className="bg-slate-100 text-slate-900 font-mono text-xs font-bold px-2.5 py-1 rounded-lg border border-slate-200 select-all">
-                            {key.token}
-                          </code>
+                        <div className="flex items-center gap-1.5 shrink-0 flex-wrap justify-end">
+                          {/* Super Admin Token Regenerator Button */}
+                          {onRegenerateAccessKey && (
+                            <button
+                              type="button"
+                              onClick={() => handleOpenRegenModal(key)}
+                              className="text-[10px] font-bold px-2.5 py-1 rounded-lg bg-indigo-50 text-indigo-700 border border-indigo-200 hover:bg-indigo-100 transition-colors cursor-pointer flex items-center gap-1"
+                              title="Regenerate & overwrite with new valid token"
+                            >
+                              <RefreshCw className="w-3 h-3" />
+                              <span>Regenerate</span>
+                            </button>
+                          )}
+
                           <button
                             type="button"
-                            onClick={() => copyToClipboard(key.token, key.id)}
-                            className="text-indigo-600 hover:text-indigo-800 p-1 rounded-lg hover:bg-indigo-50 transition-colors cursor-pointer"
-                            title="Copy Token"
+                            onClick={() => onToggleAccessKey(key.id)}
+                            className={`text-[10px] font-bold px-2.5 py-1 rounded-lg border transition-colors cursor-pointer ${
+                              key.active 
+                                ? 'bg-slate-100 text-slate-700 border-slate-200 hover:bg-slate-200'
+                                : 'bg-emerald-50 text-emerald-700 border-emerald-200 hover:bg-emerald-100'
+                            }`}
                           >
-                            {copiedKeyId === key.id ? <Check className="w-4 h-4 text-emerald-600" /> : <Copy className="w-4 h-4" />}
+                            {key.active ? 'Suspend' : 'Activate'}
+                          </button>
+                          
+                          <button
+                            type="button"
+                            onClick={() => onRevokeAccessKey(key.id)}
+                            className="p-1.5 text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded-lg transition-colors cursor-pointer"
+                            title="Delete Token"
+                          >
+                            <Trash2 className="w-4 h-4" />
                           </button>
                         </div>
-
-                        <div className="flex items-center gap-3 text-[10px] text-slate-500 font-mono pt-1">
-                          <span>Uses: {key.usedCount}{key.maxUses ? ` / ${key.maxUses}` : ''}</span>
-                          {key.expiresAt && <span>Expires: {key.expiresAt}</span>}
-                          <span>Created by {key.createdBy}</span>
-                        </div>
-                      </div>
-
-                      <div className="flex items-center gap-1 shrink-0">
-                        <button
-                          type="button"
-                          onClick={() => onToggleAccessKey(key.id)}
-                          className={`text-[10px] font-bold px-2.5 py-1 rounded-lg border transition-colors cursor-pointer ${
-                            key.active 
-                              ? 'bg-amber-50 text-amber-700 border-amber-200 hover:bg-amber-100'
-                              : 'bg-emerald-50 text-emerald-700 border-emerald-200 hover:bg-emerald-100'
-                          }`}
-                        >
-                          {key.active ? 'Disable' : 'Enable'}
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => onRevokeAccessKey(key.id)}
-                          className="p-1.5 text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded-lg transition-colors cursor-pointer"
-                          title="Delete Token"
-                        >
-                          <Trash2 className="w-4 h-4" />
-                        </button>
                       </div>
                     </div>
-                  </div>
-                ))}
+                  );
+                })}
               </div>
             )}
           </div>
 
+        </div>
+      )}
+
+      {/* Super Admin Regenerate & Overwrite Modal */}
+      {regenTargetKey && (
+        <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-xs z-50 flex items-center justify-center p-4">
+          <div className="bg-white rounded-2xl border border-slate-200 shadow-2xl p-6 max-w-lg w-full space-y-4 animate-in fade-in zoom-in-95 duration-150">
+            <div className="flex items-center justify-between border-b border-slate-100 pb-3">
+              <div className="flex items-center gap-2">
+                <div className="w-8 h-8 rounded-xl bg-indigo-50 border border-indigo-200 flex items-center justify-center text-indigo-600">
+                  <RefreshCw className="w-4 h-4" />
+                </div>
+                <div>
+                  <h4 className="font-bold text-slate-800 text-sm tracking-tight uppercase">Regenerate Access Token</h4>
+                  <p className="text-[11px] text-slate-500">Overwrite invalid or expired key with a fresh valid token.</p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setRegenTargetKey(null)}
+                className="p-1 text-slate-400 hover:text-slate-600 rounded-lg cursor-pointer"
+              >
+                ✕
+              </button>
+            </div>
+
+            {regenSuccessKey ? (
+              <div className="space-y-4 py-2">
+                <div className="p-4 rounded-2xl bg-emerald-50 border border-emerald-200 text-center space-y-2">
+                  <CheckCircle2 className="w-8 h-8 text-emerald-600 mx-auto" />
+                  <div className="font-bold text-emerald-900 text-sm">Token Successfully Overwritten!</div>
+                  <p className="text-xs text-emerald-700">
+                    The previous token is now replaced. Users can unlock the workspace immediately with this new token:
+                  </p>
+                  <div className="p-3 bg-white rounded-xl border border-emerald-300 flex items-center justify-between gap-2 mt-2">
+                    <code className="font-mono text-sm font-bold text-emerald-950 select-all">
+                      {regenSuccessKey.token}
+                    </code>
+                    <button
+                      type="button"
+                      onClick={() => copyToClipboard(regenSuccessKey.token, 'regen-success')}
+                      className="px-3 py-1 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold flex items-center gap-1 cursor-pointer"
+                    >
+                      {copiedKeyId === 'regen-success' ? <Check className="w-3.5 h-3.5" /> : <Copy className="w-3.5 h-3.5" />}
+                      <span>{copiedKeyId === 'regen-success' ? 'Copied!' : 'Copy'}</span>
+                    </button>
+                  </div>
+                </div>
+
+                <div className="flex justify-end pt-2">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setRegenTargetKey(null);
+                      setRegenSuccessKey(null);
+                    }}
+                    className="px-5 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-bold uppercase transition-colors shadow-xs cursor-pointer"
+                  >
+                    Done & Close
+                  </button>
+                </div>
+              </div>
+            ) : (
+              <form onSubmit={handleConfirmRegenerate} className="space-y-4">
+                {/* Target info */}
+                <div className="p-3 rounded-xl bg-slate-50 border border-slate-200 text-xs space-y-1">
+                  <div className="text-slate-500 text-[10px] uppercase font-mono font-bold">Target Key:</div>
+                  <div className="font-bold text-slate-800">{regenTargetKey.label}</div>
+                  <div className="flex items-center gap-2 pt-1 font-mono text-[11px] text-slate-500">
+                    <span>Current Token:</span>
+                    <span className="font-bold text-rose-700 bg-rose-50 px-1.5 py-0.2 rounded line-through">
+                      {regenTargetKey.token}
+                    </span>
+                  </div>
+                </div>
+
+                <div className="space-y-3">
+                  <div>
+                    <label className="block text-[10px] font-bold text-slate-600 uppercase tracking-wider mb-1 font-mono">
+                      Access Role
+                    </label>
+                    <select
+                      value={regenRole}
+                      onChange={(e) => setRegenRole(e.target.value as any)}
+                      className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-xs text-slate-800 focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                    >
+                      <option value="staff">Staff Access</option>
+                      <option value="company_admin">Company Administrator</option>
+                      <option value="guest">Guest / Contractor</option>
+                    </select>
+                  </div>
+
+                  <div>
+                    <label className="block text-[10px] font-bold text-slate-600 uppercase tracking-wider mb-1 font-mono">
+                      New Expiry Date (Optional - Leave blank for no expiry)
+                    </label>
+                    <input
+                      type="date"
+                      value={regenExpiresAt}
+                      onChange={(e) => setRegenExpiresAt(e.target.value)}
+                      className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-1.5 text-xs text-slate-800 focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                    />
+                  </div>
+
+                  <div className="flex items-center gap-2 pt-1">
+                    <input
+                      type="checkbox"
+                      id="resetUsesCheck"
+                      checked={regenResetUses}
+                      onChange={(e) => setRegenResetUses(e.target.checked)}
+                      className="rounded border-slate-300 text-indigo-600 focus:ring-indigo-500"
+                    />
+                    <label htmlFor="resetUsesCheck" className="text-xs text-slate-700 font-medium cursor-pointer">
+                      Reset usage counter back to 0
+                    </label>
+                  </div>
+                </div>
+
+                <div className="flex justify-end gap-2 pt-2 border-t border-slate-100">
+                  <button
+                    type="button"
+                    onClick={() => setRegenTargetKey(null)}
+                    className="bg-slate-100 hover:bg-slate-200 text-slate-700 px-4 py-2 rounded-xl text-xs font-bold transition-colors cursor-pointer"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type="submit"
+                    disabled={isRegenerating}
+                    className="bg-indigo-600 hover:bg-indigo-700 text-white px-5 py-2 rounded-xl text-xs font-bold uppercase transition-colors shadow-xs flex items-center gap-1.5 cursor-pointer disabled:opacity-50"
+                  >
+                    <RefreshCw className={`w-3.5 h-3.5 ${isRegenerating ? 'animate-spin' : ''}`} />
+                    <span>{isRegenerating ? 'Regenerating...' : 'Overwrite & Regenerate'}</span>
+                  </button>
+                </div>
+              </form>
+            )}
+          </div>
         </div>
       )}
 
