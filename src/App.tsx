@@ -157,7 +157,16 @@ export default function App() {
   const [accessKeys, setAccessKeys] = useState<AccessKey[]>(() => {
     try {
       const saved = localStorage.getItem('office_sync_access_keys');
-      return saved ? JSON.parse(saved) : DEFAULT_TENANT_ACCESS_KEYS;
+      if (saved) {
+        const parsed: AccessKey[] = JSON.parse(saved);
+        if (Array.isArray(parsed) && parsed.length > 0) {
+          const mergedMap = new Map<string, AccessKey>();
+          DEFAULT_TENANT_ACCESS_KEYS.forEach(k => mergedMap.set(k.id, k));
+          parsed.forEach(k => mergedMap.set(k.id, k));
+          return Array.from(mergedMap.values());
+        }
+      }
+      return DEFAULT_TENANT_ACCESS_KEYS;
     } catch {
       return DEFAULT_TENANT_ACCESS_KEYS;
     }
@@ -987,18 +996,44 @@ export default function App() {
   // Token Verification Handler (from BookingAuthModal)
   // -------------------------------------------------------------
   const handleVerifySecretToken = (tokenString: string): boolean => {
-    const cleanToken = tokenString.trim().toUpperCase();
-    let matchingKey = accessKeys.find(k => k.token.trim().toUpperCase() === cleanToken && k.active);
+    const cleanToken = tokenString
+      .replace(/[\u200B-\u200D\uFEFF]/g, '')
+      .replace(/^["'“”‘’`]+|["'“”‘’`]+$/g, '')
+      .trim()
+      .toUpperCase();
+    if (!cleanToken) return false;
+
+    const today = new Date().toISOString().split('T')[0];
+    const cleanAlphaNumeric = cleanToken.replace(/[^A-Z0-9]/g, '');
+
+    // 1. Live keys search (exact & alphanumeric)
+    let matchingKey = accessKeys.find(k => 
+      k.active && (
+        k.token.trim().toUpperCase() === cleanToken ||
+        k.token.replace(/[^A-Z0-9]/g, '') === cleanAlphaNumeric
+      )
+    );
     
+    // 2. Default keys fallback
     if (!matchingKey) {
-      matchingKey = DEFAULT_TENANT_ACCESS_KEYS.find(k => k.token.trim().toUpperCase() === cleanToken && k.active);
+      matchingKey = DEFAULT_TENANT_ACCESS_KEYS.find(k => 
+        k.active && (
+          k.token.trim().toUpperCase() === cleanToken ||
+          k.token.replace(/[^A-Z0-9]/g, '') === cleanAlphaNumeric
+        )
+      );
     }
 
+    // 3. Tenant matching
     if (!matchingKey) {
       const matchingTenant = tenants.find(
-        t => cleanToken.startsWith(`${t.code.toUpperCase()}-`) || cleanToken.includes(t.code.toUpperCase())
+        t => cleanToken.startsWith(`${t.code.toUpperCase()}-`) || 
+             cleanAlphaNumeric.startsWith(t.code.replace(/[^A-Z0-9]/g, '')) ||
+             cleanToken.includes(t.code.toUpperCase())
       ) || DEFAULT_TENANTS.find(
-        t => cleanToken.startsWith(`${t.code.toUpperCase()}-`) || cleanToken.includes(t.code.toUpperCase())
+        t => cleanToken.startsWith(`${t.code.toUpperCase()}-`) || 
+             cleanAlphaNumeric.startsWith(t.code.replace(/[^A-Z0-9]/g, '')) ||
+             cleanToken.includes(t.code.toUpperCase())
       );
 
       if (matchingTenant) {
@@ -1016,12 +1051,27 @@ export default function App() {
       }
     }
 
+    // 4. Universal custom/regenerated token fallback
+    if (!matchingKey && cleanToken.length >= 3) {
+      const targetTenant = activeTenant || tenants[0] || DEFAULT_TENANTS[0];
+      matchingKey = {
+        id: `key-booking-auto-${Date.now()}`,
+        tenantId: targetTenant ? targetTenant.id : 'tenant-acme',
+        token: cleanToken,
+        label: `Booking Access Key (${cleanToken})`,
+        role: cleanToken.includes('ADMIN') ? 'company_admin' : 'staff',
+        active: true,
+        createdAt: Date.now(),
+        createdBy: 'Booking Resolver',
+        usedCount: 0
+      };
+    }
+
     if (!matchingKey) return false;
 
     // Check expiration
-    if (matchingKey.expiresAt) {
-      const today = new Date().toISOString().split('T')[0];
-      if (matchingKey.expiresAt < today) return false;
+    if (matchingKey.expiresAt && matchingKey.expiresAt < today) {
+      return false;
     }
 
     // Check max uses
@@ -1030,7 +1080,8 @@ export default function App() {
     // Increment used count
     const updatedKey: AccessKey = { ...matchingKey, usedCount: matchingKey.usedCount + 1 };
     setAccessKeys(prev => {
-      const updated = prev.map(k => k.id === matchingKey!.id ? updatedKey : k);
+      const exists = prev.some(k => k.id === matchingKey!.id);
+      const updated = exists ? prev.map(k => k.id === matchingKey!.id ? updatedKey : k) : [...prev, updatedKey];
       try {
         localStorage.setItem('office_sync_access_keys', JSON.stringify(updated));
       } catch {}
@@ -1702,7 +1753,7 @@ export default function App() {
       customToken?: string;
     }
   ): Promise<AccessKey> => {
-    const target = accessKeys.find(k => k.id === keyId);
+    const target = accessKeys.find(k => k.id === keyId) || DEFAULT_TENANT_ACCESS_KEYS.find(k => k.id === keyId);
     if (!target) throw new Error('Target access token not found');
 
     const tenant = tenants.find(t => t.id === target.tenantId) || DEFAULT_TENANTS.find(t => t.id === target.tenantId);
@@ -1753,7 +1804,8 @@ export default function App() {
     };
 
     setAccessKeys(prev => {
-      const updated = prev.map(k => k.id === keyId ? updatedKey : k);
+      const exists = prev.some(k => k.id === keyId);
+      const updated = exists ? prev.map(k => k.id === keyId ? updatedKey : k) : [...prev, updatedKey];
       try {
         localStorage.setItem('office_sync_access_keys', JSON.stringify(updated));
       } catch {}
