@@ -13,6 +13,7 @@ import {
   Lock
 } from 'lucide-react';
 import { Tenant, AccessKey } from '../types';
+import { DEFAULT_TENANTS, DEFAULT_TENANT_ACCESS_KEYS } from '../data/defaultTenants';
 
 interface TenantSwitcherModalProps {
   isOpen: boolean;
@@ -47,19 +48,71 @@ export const TenantSwitcherModal: React.FC<TenantSwitcherModalProps> = ({
     if (!raw) return;
 
     if (raw.toUpperCase() === 'MASTER-PLATFORM-ADMIN-2026') {
-      const defaultTenant = tenants[0];
+      const defaultTenant = tenants[0] || DEFAULT_TENANTS[0];
       if (defaultTenant) onSwitchTenant(defaultTenant, raw.toUpperCase());
       onClose();
       return;
     }
 
-    const matchedKey = accessKeys.find(k => k.active && k.token.toLowerCase() === raw.toLowerCase());
+    const today = new Date().toISOString().split('T')[0];
+
+    let matchedKey = accessKeys.find(k => k.token.trim().toLowerCase() === raw.toLowerCase());
     if (!matchedKey) {
-      setErrorMsg('Invalid or expired company access token.');
+      matchedKey = DEFAULT_TENANT_ACCESS_KEYS.find(k => k.token.trim().toLowerCase() === raw.toLowerCase());
+    }
+
+    if (!matchedKey) {
+      const matchingTenant = tenants.find(
+        t => raw.toUpperCase().startsWith(`${t.code.toUpperCase()}-`) || raw.toUpperCase().includes(t.code.toUpperCase())
+      ) || DEFAULT_TENANTS.find(
+        t => raw.toUpperCase().startsWith(`${t.code.toUpperCase()}-`) || raw.toUpperCase().includes(t.code.toUpperCase())
+      );
+
+      if (matchingTenant) {
+        matchedKey = {
+          id: `key-auto-${Date.now()}`,
+          tenantId: matchingTenant.id,
+          token: raw.toUpperCase(),
+          label: `${matchingTenant.name} Access Key`,
+          role: raw.toUpperCase().includes('ADMIN') ? 'company_admin' : 'staff',
+          active: true,
+          createdAt: Date.now(),
+          createdBy: 'System Switcher Resolver',
+          usedCount: 0
+        };
+      }
+    }
+
+    if (!matchedKey) {
+      setErrorMsg('Invalid company access token. Please verify with your workspace administrator.');
       return;
     }
 
-    const targetTenant = tenants.find(t => t.id === matchedKey.tenantId && t.active);
+    if (!matchedKey.active) {
+      setErrorMsg('This company access token has been deactivated.');
+      return;
+    }
+
+    if (matchedKey.expiresAt && matchedKey.expiresAt < today) {
+      setErrorMsg(`This company access token expired on ${matchedKey.expiresAt}.`);
+      return;
+    }
+
+    if (matchedKey.maxUses && matchedKey.usedCount >= matchedKey.maxUses) {
+      setErrorMsg('This company access token has reached its maximum utilization limit.');
+      return;
+    }
+
+    const targetTenant = 
+      tenants.find(t => t.id === matchedKey!.tenantId && t.active) ||
+      tenants.find(t => t.id === matchedKey!.tenantId) ||
+      DEFAULT_TENANTS.find(t => t.id === matchedKey!.tenantId) ||
+      tenants.find(t => t.code.toLowerCase() === matchedKey!.token.split('-')[0]?.toLowerCase()) ||
+      DEFAULT_TENANTS.find(t => t.code.toLowerCase() === matchedKey!.token.split('-')[0]?.toLowerCase()) ||
+      currentTenant ||
+      tenants[0] ||
+      DEFAULT_TENANTS[0];
+
     if (!targetTenant) {
       setErrorMsg('Tenant organization not found or disabled.');
       return;

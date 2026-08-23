@@ -236,7 +236,9 @@ export const AdminAccessControl: React.FC<AdminAccessControlProps> = ({
 
   const handleOpenRegenModal = (key: AccessKey) => {
     setRegenTargetKey(key);
-    setRegenExpiresAt(key.expiresAt || '');
+    // If the key was expired, reset the date field to blank so the regenerated token is active without expiration
+    const isPast = key.expiresAt && key.expiresAt < today;
+    setRegenExpiresAt(isPast ? '' : (key.expiresAt || ''));
     setRegenRole((key.role as any) || 'staff');
     setRegenResetUses(true);
     setRegenCustomToken('');
@@ -250,7 +252,7 @@ export const AdminAccessControl: React.FC<AdminAccessControlProps> = ({
     setIsRegenerating(true);
     try {
       const updated = await onRegenerateAccessKey(regenTargetKey.id, {
-        newExpiresAt: regenExpiresAt || undefined,
+        newExpiresAt: regenExpiresAt.trim() ? regenExpiresAt.trim() : '',
         resetUses: regenResetUses,
         role: regenRole,
         customToken: regenCustomToken.trim() || undefined

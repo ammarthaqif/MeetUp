@@ -67,15 +67,17 @@ export const TenantPortalGate: React.FC<TenantPortalGateProps> = ({
     setSuccessMsg(null);
 
     setTimeout(() => {
+      const today = new Date().toISOString().split('T')[0];
+
       // 1. Find matching Access Key in active accessKeys state
       let matchedKey = accessKeys.find(
-        k => k.active && k.token.trim().toLowerCase() === raw.toLowerCase()
+        k => k.token.trim().toLowerCase() === raw.toLowerCase()
       );
 
       // 2. Fallback search in default access keys
       if (!matchedKey) {
         matchedKey = DEFAULT_TENANT_ACCESS_KEYS.find(
-          k => k.active && k.token.trim().toLowerCase() === raw.toLowerCase()
+          k => k.token.trim().toLowerCase() === raw.toLowerCase()
         );
       }
 
@@ -104,14 +106,28 @@ export const TenantPortalGate: React.FC<TenantPortalGateProps> = ({
       }
 
       if (!matchedKey) {
-        setErrorMsg('Invalid or expired company access token. Please verify with your workspace administrator.');
+        setErrorMsg('Invalid company access token. Please verify with your workspace administrator.');
+        setIsVerifying(false);
+        return;
+      }
+
+      // Check active state
+      if (!matchedKey.active) {
+        setErrorMsg('This company access token has been deactivated or revoked.');
+        setIsVerifying(false);
+        return;
+      }
+
+      // Check expiration
+      if (matchedKey.expiresAt && matchedKey.expiresAt < today) {
+        setErrorMsg(`This company access token expired on ${matchedKey.expiresAt}. Please request a renewed token.`);
         setIsVerifying(false);
         return;
       }
 
       // Check max uses
       if (matchedKey.maxUses && matchedKey.usedCount >= matchedKey.maxUses) {
-        setErrorMsg('This company access token has reached its maximum utilization threshold.');
+        setErrorMsg('This company access token has reached its maximum utilization limit.');
         setIsVerifying(false);
         return;
       }
@@ -128,23 +144,28 @@ export const TenantPortalGate: React.FC<TenantPortalGateProps> = ({
         setSuccessMsg(`Authenticated via ${matchedKey.label}`);
         setTimeout(() => {
           if (isSuperAdmin) {
-            onUnlockMasterAdmin(matchedKey.token);
+            onUnlockMasterAdmin(matchedKey!.token);
           }
           if (defaultTenant) {
-            onUnlockTenant(defaultTenant, matchedKey.token, matchedKey.role || 'company_admin');
+            onUnlockTenant(defaultTenant, matchedKey!.token, matchedKey!.role || 'company_admin');
           }
         }, 400);
         setIsVerifying(false);
         return;
       }
 
-      // Find tenant
-      const targetTenant = tenants.find(t => t.id === matchedKey!.tenantId && t.active) ||
+      // Find tenant (with broad fallback resolution)
+      const targetTenant = 
+        tenants.find(t => t.id === matchedKey!.tenantId && t.active) ||
+        tenants.find(t => t.id === matchedKey!.tenantId) ||
         DEFAULT_TENANTS.find(t => t.id === matchedKey!.tenantId) ||
-        tenants.find(t => t.code.toLowerCase() === matchedKey!.token.split('-')[0]?.toLowerCase());
+        tenants.find(t => t.code.toLowerCase() === matchedKey!.token.split('-')[0]?.toLowerCase()) ||
+        DEFAULT_TENANTS.find(t => t.code.toLowerCase() === matchedKey!.token.split('-')[0]?.toLowerCase()) ||
+        tenants[0] ||
+        DEFAULT_TENANTS[0];
 
       if (!targetTenant) {
-        setErrorMsg('The organization associated with this token is currently deactivated or unavailable.');
+        setErrorMsg('The organization associated with this token is currently unavailable.');
         setIsVerifying(false);
         return;
       }

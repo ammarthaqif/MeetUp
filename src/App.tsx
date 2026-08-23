@@ -1708,16 +1708,35 @@ export default function App() {
     const tenant = tenants.find(t => t.id === target.tenantId) || DEFAULT_TENANTS.find(t => t.id === target.tenantId);
     const prefix = tenant ? tenant.code : 'SEC';
     const role = options?.role || target.role || 'staff';
+    const roleSlug = role === 'company_admin' ? 'ADMIN' : role === 'guest' ? 'GUEST' : 'STAFF';
     const randomSuffix = Math.floor(1000 + Math.random() * 9000);
     const randomHex = Math.random().toString(36).substring(2, 6).toUpperCase();
 
     let newToken = options?.customToken?.trim().toUpperCase();
     if (!newToken) {
       if (target.tenantId && target.tenantId !== 'ALL') {
-        newToken = `${prefix}-${role.toUpperCase().replace('_', '')}-${randomSuffix}`;
+        newToken = `${prefix}-${roleSlug}-${randomSuffix}`;
       } else {
         newToken = `SEC-${randomHex}-${randomSuffix}`;
       }
+    }
+
+    const today = new Date().toISOString().split('T')[0];
+    
+    // Determine new expiry date:
+    // 1. If explicit non-empty date string is provided, use it
+    // 2. If newExpiresAt is explicitly empty string, remove expiry completely (undefined)
+    // 3. If target's old expiry date was in the past (expired), clear it so the regenerated token is active
+    // 4. Otherwise, retain future expiry date if still valid
+    let finalExpiresAt: string | undefined = undefined;
+    if (options?.newExpiresAt && options.newExpiresAt.trim() !== '') {
+      finalExpiresAt = options.newExpiresAt.trim();
+    } else if (options?.newExpiresAt === '') {
+      finalExpiresAt = undefined;
+    } else if (target.expiresAt && target.expiresAt >= today) {
+      finalExpiresAt = target.expiresAt;
+    } else {
+      finalExpiresAt = undefined; // Cleared expired date
     }
 
     const oldToken = target.token;
@@ -1728,7 +1747,7 @@ export default function App() {
       label: options?.newLabel || target.label,
       active: true,
       usedCount: options?.resetUses !== false ? 0 : target.usedCount,
-      expiresAt: options?.newExpiresAt !== undefined ? options.newExpiresAt : target.expiresAt,
+      expiresAt: finalExpiresAt,
       createdAt: Date.now(),
       createdBy: user?.email || ADMIN_EMAIL,
     };
@@ -1789,7 +1808,10 @@ export default function App() {
     }
 
     for (const key of invalidKeys) {
-      await handleRegenerateAccessKey(key.id, { resetUses: true });
+      await handleRegenerateAccessKey(key.id, { 
+        resetUses: true,
+        newExpiresAt: '' // Explicitly clear any past expiration date
+      });
     }
 
     showNotification('success', `Successfully regenerated & restored ${invalidKeys.length} invalid access tokens.`);
