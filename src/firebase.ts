@@ -1,7 +1,19 @@
 import { initializeApp, getApps, FirebaseApp } from 'firebase/app';
 import { getAuth, signInWithPopup, GoogleAuthProvider, onAuthStateChanged, User, Auth } from 'firebase/auth';
-import { getFirestore, Firestore } from 'firebase/firestore';
+import { 
+  initializeFirestore, 
+  getFirestore, 
+  persistentLocalCache, 
+  persistentMultipleTabManager,
+  setLogLevel,
+  Firestore 
+} from 'firebase/firestore';
 import firebaseConfigJson from '../firebase-applet-config.json';
+
+// Silence verbose connection retry logs in sandboxed/offline preview environments
+try {
+  setLogLevel('error');
+} catch {}
 
 // Default configuration with safe fallback
 let firebaseConfig: any = {
@@ -42,7 +54,18 @@ try {
   }
   if (app) {
     authInstance = getAuth(app);
-    dbInstance = getFirestore(app);
+    try {
+      // Use long-polling with multi-tab persistent cache for maximum stability in preview/iframe sandboxes
+      dbInstance = initializeFirestore(app, {
+        experimentalForceLongPolling: true,
+        localCache: persistentLocalCache({
+          tabManager: persistentMultipleTabManager()
+        })
+      });
+    } catch {
+      // Graceful fallback to default instance
+      dbInstance = getFirestore(app);
+    }
   }
 } catch (error) {
   console.warn('Firebase initialization warning (falling back to local memory mode):', error);

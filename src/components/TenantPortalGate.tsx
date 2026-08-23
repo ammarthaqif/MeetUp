@@ -18,6 +18,12 @@ import {
 } from 'lucide-react';
 import { Tenant, AccessKey } from '../types';
 import { DEFAULT_TENANTS, DEFAULT_TENANT_ACCESS_KEYS } from '../data/defaultTenants';
+import { 
+  timingSafeEqual, 
+  getRateLimitStatus, 
+  recordFailedAttempt, 
+  resetRateLimit 
+} from '../utils/security';
 
 interface TenantPortalGateProps {
   tenants: Tenant[];
@@ -66,9 +72,18 @@ export const TenantPortalGate: React.FC<TenantPortalGateProps> = ({
       return;
     }
 
+    const rateStatus = getRateLimitStatus();
+    if (rateStatus.isLocked) {
+      setErrorMsg(`Anti-Brute-Force Lockout active. Please wait ${rateStatus.remainingLockoutSeconds}s before retrying.`);
+      setIsVerifying(false);
+      return;
+    }
+
     setIsVerifying(true);
     setErrorMsg(null);
     setSuccessMsg(null);
+
+    const delayMs = Math.max(250, rateStatus.penaltyDelayMs);
 
     setTimeout(() => {
       const today = new Date().toISOString().split('T')[0];
@@ -91,80 +106,42 @@ export const TenantPortalGate: React.FC<TenantPortalGateProps> = ({
         }
       } catch {}
 
-      // 1. Exact match in live access keys
+      // 1. Timing-safe exact match in live access keys
       let matchedKey = liveKeys.find(
-        k => k.token.trim().toLowerCase() === rawNormalized
+        k => timingSafeEqual(k.token, rawInput)
       );
 
-      // 2. Alphanumeric match (ignoring dashes and whitespace, e.g. ACMESTAFF101 vs ACME-STAFF-101)
+      // 2. Timing-safe alphanumeric match (ignoring dashes and whitespace)
       if (!matchedKey) {
         matchedKey = liveKeys.find(
-          k => k.token.replace(/[^a-zA-Z0-9]/g, '').toLowerCase() === rawAlphaNumeric
+          k => timingSafeEqual(k.token.replace(/[^a-zA-Z0-9]/g, ''), rawAlphaNumeric)
         );
       }
 
       // 3. Fallback search in default access keys
       if (!matchedKey) {
         matchedKey = DEFAULT_TENANT_ACCESS_KEYS.find(
-          k => k.token.trim().toLowerCase() === rawNormalized ||
-               k.token.replace(/[^a-zA-Z0-9]/g, '').toLowerCase() === rawAlphaNumeric
+          k => timingSafeEqual(k.token, rawInput) ||
+               timingSafeEqual(k.token.replace(/[^a-zA-Z0-9]/g, ''), rawAlphaNumeric)
         );
       }
 
-      // 4. Fallback: Check if token pattern matches tenant code, name, or passkey
+      // If not matched, apply rate limiter penalty and reject
       if (!matchedKey) {
-        const matchingTenant = tenants.find(t => 
-          rawNormalized === t.code.toLowerCase() ||
-          rawNormalized === t.name.toLowerCase() ||
-          rawNormalized.startsWith(`${t.code.toLowerCase()}-`) ||
-          rawAlphaNumeric.startsWith(t.code.replace(/[^a-zA-Z0-9]/g, '').toLowerCase()) ||
-          rawNormalized.includes(t.code.toLowerCase())
-        ) || DEFAULT_TENANTS.find(t => 
-          rawNormalized === t.code.toLowerCase() ||
-          rawNormalized === t.name.toLowerCase() ||
-          rawNormalized.startsWith(`${t.code.toLowerCase()}-`) ||
-          rawAlphaNumeric.startsWith(t.code.replace(/[^a-zA-Z0-9]/g, '').toLowerCase()) ||
-          rawNormalized.includes(t.code.toLowerCase())
-        );
-
-        if (matchingTenant) {
-          const isAdminToken = rawInput.toUpperCase().includes('ADMIN') || rawNormalized === 'admin';
-          matchedKey = {
-            id: `key-auto-${Date.now()}`,
-            tenantId: matchingTenant.id,
-            token: rawInput.toUpperCase(),
-            label: `${matchingTenant.name} ${isAdminToken ? 'Admin' : 'Staff'} Access Key`,
-            role: isAdminToken ? 'company_admin' : 'staff',
-            active: true,
-            createdAt: Date.now(),
-            createdBy: 'System Passkey Resolver',
-            usedCount: 0
-          };
+        const penalty = recordFailedAttempt();
+        if (penalty.isLocked) {
+          setErrorMsg(`Security Lockout: Too many invalid attempts. Try again in ${penalty.remainingLockoutSeconds}s.`);
+        } else if (penalty.warning) {
+          setErrorMsg(penalty.warning);
+        } else {
+          setErrorMsg('Invalid company access token. Please verify with your workspace administrator.');
         }
-      }
-
-      // 5. Ultimate fallback for any formatted token or custom regenerated token
-      if (!matchedKey && rawInput.length >= 3) {
-        const defaultTenant = tenants[0] || DEFAULT_TENANTS[0];
-        const isAdmin = rawInput.toUpperCase().includes('ADMIN');
-        matchedKey = {
-          id: `key-fallback-${Date.now()}`,
-          tenantId: defaultTenant ? defaultTenant.id : 'tenant-acme',
-          token: rawInput.toUpperCase(),
-          label: `Workspace Access Key (${rawInput.toUpperCase()})`,
-          role: isAdmin ? 'company_admin' : 'staff',
-          active: true,
-          createdAt: Date.now(),
-          createdBy: 'Fallback Token Resolver',
-          usedCount: 0
-        };
-      }
-
-      if (!matchedKey) {
-        setErrorMsg('Invalid company access token. Please verify with your workspace administrator.');
         setIsVerifying(false);
         return;
       }
+
+      // Reset rate limit on valid key
+      resetRateLimit();
 
       // Check active state
       if (!matchedKey.active) {
@@ -209,18 +186,16 @@ export const TenantPortalGate: React.FC<TenantPortalGateProps> = ({
         return;
       }
 
-      // Find tenant (with broad fallback resolution)
+      // Find tenant strictly associated with this token's tenantId
       const targetTenant = 
         tenants.find(t => t.id === matchedKey!.tenantId && t.active) ||
         tenants.find(t => t.id === matchedKey!.tenantId) ||
         DEFAULT_TENANTS.find(t => t.id === matchedKey!.tenantId) ||
-        tenants.find(t => t.code.toLowerCase() === matchedKey!.token.split('-')[0]?.toLowerCase()) ||
-        DEFAULT_TENANTS.find(t => t.code.toLowerCase() === matchedKey!.token.split('-')[0]?.toLowerCase()) ||
-        tenants[0] ||
-        DEFAULT_TENANTS[0];
+        tenants.find(t => t.code.toUpperCase() === matchedKey!.token.split('-')[0]?.toUpperCase()) ||
+        DEFAULT_TENANTS.find(t => t.code.toUpperCase() === matchedKey!.token.split('-')[0]?.toUpperCase());
 
       if (!targetTenant) {
-        setErrorMsg('The organization associated with this token is currently unavailable.');
+        setErrorMsg('The organization associated with this token is currently unavailable or inactive.');
         setIsVerifying(false);
         return;
       }
@@ -231,7 +206,7 @@ export const TenantPortalGate: React.FC<TenantPortalGateProps> = ({
         onUnlockTenant(targetTenant, matchedKey!.token, roleToAssign);
       }, 400);
       setIsVerifying(false);
-    }, 300);
+    }, delayMs);
   };
 
   const handleLaunchSuperAdmin = () => {

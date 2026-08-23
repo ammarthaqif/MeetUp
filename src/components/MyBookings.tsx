@@ -1,8 +1,8 @@
-import React from 'react';
-import { Calendar, Trash2, Clock, MapPin, Download, Sparkles, RefreshCw, AlertCircle } from 'lucide-react';
+import React, { useState } from 'react';
+import { Calendar, Trash2, Clock, MapPin, Download, Sparkles, RefreshCw, AlertCircle, Check, CalendarPlus } from 'lucide-react';
 import { Booking, Room } from '../types';
 import { formatFriendlyDate, getBookingStatus } from '../utils';
-import { downloadIcsFile } from '../outlookSync';
+import { downloadIcsFile, downloadMultipleIcsFile } from '../outlookSync';
 
 interface MyBookingsProps {
   bookings: Booking[];
@@ -21,9 +21,10 @@ export const MyBookings: React.FC<MyBookingsProps> = ({
   onSyncGoogleNow,
   googleSyncAvailable,
 }) => {
-  // If user is anonymous or not signed in, we can filter by the name entered or list all bookings if they are using local guest profiles.
-  // Let's filter bookings where the email matches the currentUserEmail.
-  // In addition, if no user is signed in, we can display guest mode and show recent bookings.
+  const [exportedId, setExportedId] = useState<string | null>(null);
+  const [allExported, setAllExported] = useState(false);
+
+  // If user is anonymous or not signed in, filter by email or list user's bookings
   const myBookings = bookings.filter(
     b => currentUserEmail && b.hostEmail.toLowerCase() === currentUserEmail.toLowerCase()
   );
@@ -37,24 +38,55 @@ export const MyBookings: React.FC<MyBookingsProps> = ({
     .filter(b => getBookingStatus(b) === 'past')
     .sort((a, b) => b.date.localeCompare(a.date) || b.startTime.localeCompare(a.startTime));
 
-  const handleOutlookExport = (booking: Booking) => {
+  const handleExportIcs = (booking: Booking) => {
     const room = rooms.find(r => r.id === booking.roomId);
-    if (!room) return;
     downloadIcsFile(booking, room);
+    setExportedId(booking.id);
+    setTimeout(() => {
+      setExportedId(prev => (prev === booking.id ? null : prev));
+    }, 2500);
+  };
+
+  const handleExportAllIcs = () => {
+    if (myBookings.length === 0) return;
+    downloadMultipleIcsFile(myBookings, rooms);
+    setAllExported(true);
+    setTimeout(() => setAllExported(false), 2500);
   };
 
   return (
     <div id="my-bookings-container" className="bg-white border border-slate-200 rounded-lg p-4 shadow-sm">
-      <div className="flex items-center justify-between mb-4">
+      <div className="flex flex-wrap items-center justify-between gap-2 mb-4">
         <div className="flex items-center gap-2">
           <Sparkles className="w-4 h-4 text-indigo-600" />
           <h2 className="font-sans font-bold text-slate-800 tracking-tight text-xs uppercase">
             My Reservations
           </h2>
+          <span className="text-[10px] font-mono bg-slate-100 text-slate-600 px-2.5 py-0.5 rounded font-black uppercase">
+            {myBookings.length} TOTAL
+          </span>
         </div>
-        <span className="text-[10px] font-mono bg-slate-100 text-slate-600 px-2.5 py-0.5 rounded font-black uppercase">
-          {myBookings.length} TOTAL
-        </span>
+
+        {myBookings.length > 0 && (
+          <button
+            id="export-all-ics-btn"
+            onClick={handleExportAllIcs}
+            className="inline-flex items-center gap-1.5 text-[10px] font-bold text-slate-700 hover:text-indigo-600 bg-slate-50 hover:bg-indigo-50 border border-slate-200 hover:border-indigo-200 px-2.5 py-1.5 rounded-md transition-all cursor-pointer shadow-2xs"
+            title="Export all reservations into a single .ics calendar file"
+          >
+            {allExported ? (
+              <>
+                <Check className="w-3 h-3 text-emerald-600" />
+                <span className="text-emerald-700 font-black">All Exported (.ics)</span>
+              </>
+            ) : (
+              <>
+                <CalendarPlus className="w-3 h-3 text-indigo-600" />
+                <span>Export All (.ics)</span>
+              </>
+            )}
+          </button>
+        )}
       </div>
 
       {!currentUserEmail ? (
@@ -83,11 +115,12 @@ export const MyBookings: React.FC<MyBookingsProps> = ({
                 {activeBookings.map(booking => {
                   const room = rooms.find(r => r.id === booking.roomId);
                   const status = getBookingStatus(booking);
+                  const isExported = exportedId === booking.id;
 
                   return (
                     <div
                       key={booking.id}
-                      className="border border-slate-200 rounded p-3 hover:border-slate-300 transition-all bg-white relative flex flex-col justify-between group"
+                      className="border border-slate-200 rounded p-3 hover:border-slate-300 transition-all bg-white relative flex flex-col justify-between group shadow-2xs"
                     >
                       <div>
                         {/* Status tag */}
@@ -132,15 +165,29 @@ export const MyBookings: React.FC<MyBookingsProps> = ({
 
                       {/* Action buttons */}
                       <div className="flex items-center justify-between border-t border-slate-100 pt-2 mt-3 gap-2">
-                        <div className="flex gap-1">
-                          {/* Outlook / .ics Export */}
+                        <div className="flex flex-wrap gap-1.5 items-center">
+                          {/* Dedicated .ics Calendar Export button */}
                           <button
-                            onClick={() => handleOutlookExport(booking)}
-                            className="inline-flex items-center gap-1 text-[9px] font-bold uppercase tracking-wider text-slate-600 hover:text-indigo-600 hover:bg-indigo-50 px-2 py-1 rounded border border-slate-200 transition-colors cursor-pointer"
-                            title="Export to Outlook (ICS file)"
+                            id={`export-ics-${booking.id}`}
+                            onClick={() => handleExportIcs(booking)}
+                            className={`inline-flex items-center gap-1 text-[9px] font-bold uppercase tracking-wider px-2 py-1 rounded border transition-all cursor-pointer ${
+                              isExported
+                                ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
+                                : 'text-slate-700 hover:text-indigo-600 hover:bg-indigo-50 border-slate-200 hover:border-indigo-200'
+                            }`}
+                            title="Export reservation to .ics file for personal calendar (Apple, Google, Outlook)"
                           >
-                            <Download className="w-2.5 h-2.5" />
-                            <span>Outlook</span>
+                            {isExported ? (
+                              <>
+                                <Check className="w-2.5 h-2.5 text-emerald-600" />
+                                <span>Exported!</span>
+                              </>
+                            ) : (
+                              <>
+                                <Download className="w-2.5 h-2.5 text-slate-500" />
+                                <span>Export .ics</span>
+                              </>
+                            )}
                           </button>
 
                           {/* Manual Google Sync button if not yet synced */}
@@ -184,13 +231,14 @@ export const MyBookings: React.FC<MyBookingsProps> = ({
                 Past Meetings ({pastBookings.length})
               </h3>
               <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                {pastBookings.slice(0, 4).map(booking => {
+                {pastBookings.slice(0, 6).map(booking => {
                   const room = rooms.find(r => r.id === booking.roomId);
+                  const isExported = exportedId === booking.id;
 
                   return (
                     <div
                       key={booking.id}
-                      className="border border-slate-200 rounded p-3 bg-slate-50/40 opacity-75 relative flex flex-col justify-between"
+                      className="border border-slate-200 rounded p-3 bg-slate-50/40 opacity-85 relative flex flex-col justify-between hover:opacity-100 transition-opacity"
                     >
                       <div>
                         <div className="flex items-center justify-between mb-1.5">
@@ -212,6 +260,32 @@ export const MyBookings: React.FC<MyBookingsProps> = ({
                           </div>
                         </div>
                       </div>
+
+                      {/* Action buttons for past meetings */}
+                      <div className="flex items-center justify-between border-t border-slate-100 pt-2 mt-3 gap-2">
+                        <button
+                          id={`export-ics-past-${booking.id}`}
+                          onClick={() => handleExportIcs(booking)}
+                          className={`inline-flex items-center gap-1 text-[9px] font-bold uppercase tracking-wider px-2 py-1 rounded border transition-all cursor-pointer ${
+                            isExported
+                              ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
+                              : 'text-slate-600 hover:text-indigo-600 hover:bg-white border-slate-200'
+                          }`}
+                          title="Export reservation to .ics file"
+                        >
+                          {isExported ? (
+                            <>
+                              <Check className="w-2.5 h-2.5 text-emerald-600" />
+                              <span>Exported!</span>
+                            </>
+                          ) : (
+                            <>
+                              <Download className="w-2.5 h-2.5 text-slate-400" />
+                              <span>Export .ics</span>
+                            </>
+                          )}
+                        </button>
+                      </div>
                     </div>
                   );
                 })}
@@ -223,3 +297,4 @@ export const MyBookings: React.FC<MyBookingsProps> = ({
     </div>
   );
 };
+

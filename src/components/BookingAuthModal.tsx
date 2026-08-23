@@ -1,6 +1,7 @@
-import React, { useState } from 'react';
-import { ShieldCheck, Key, Lock, AlertCircle, CheckCircle2, ArrowRight, UserCheck, Sparkles, X } from 'lucide-react';
+import React, { useState, useEffect } from 'react';
+import { ShieldCheck, Key, Lock, AlertCircle, CheckCircle2, ArrowRight, UserCheck, Sparkles, X, ShieldAlert } from 'lucide-react';
 import { AccessKey } from '../types';
+import { getRateLimitStatus } from '../utils/security';
 
 interface BookingAuthModalProps {
   isOpen: boolean;
@@ -22,11 +23,25 @@ export const BookingAuthModal: React.FC<BookingAuthModalProps> = ({
   const [tokenInput, setTokenInput] = useState('');
   const [errorMsg, setErrorMsg] = useState('');
   const [isVerifying, setIsVerifying] = useState(false);
+  const [rateLimit, setRateLimit] = useState<{ isLocked: boolean; remainingLockoutSeconds: number }>(() => getRateLimitStatus());
+
+  useEffect(() => {
+    if (!isOpen) return;
+    const interval = setInterval(() => {
+      setRateLimit(getRateLimitStatus());
+    }, 1000);
+    return () => clearInterval(interval);
+  }, [isOpen]);
 
   if (!isOpen) return null;
 
   const handleTokenSubmit = (e: React.FormEvent) => {
     e.preventDefault();
+    if (rateLimit.isLocked) {
+      setErrorMsg(`Anti-Brute-Force Lockout active. Please wait ${rateLimit.remainingLockoutSeconds}s before retrying.`);
+      return;
+    }
+
     if (!tokenInput.trim()) {
       setErrorMsg('Please enter a valid secret access token.');
       return;
@@ -39,7 +54,13 @@ export const BookingAuthModal: React.FC<BookingAuthModalProps> = ({
     setIsVerifying(false);
 
     if (!success) {
-      setErrorMsg('Invalid, expired, or inactive Secret Access Token. Please contact the administrator.');
+      const updatedStatus = getRateLimitStatus();
+      setRateLimit(updatedStatus);
+      if (updatedStatus.isLocked) {
+        setErrorMsg(`Security Lockout: Too many invalid attempts. Try again in ${updatedStatus.remainingLockoutSeconds}s.`);
+      } else {
+        setErrorMsg('Invalid, expired, or inactive Secret Access Token. Please contact the administrator.');
+      }
     } else {
       setTokenInput('');
       onClose();
@@ -102,6 +123,19 @@ export const BookingAuthModal: React.FC<BookingAuthModalProps> = ({
           </div>
         )}
 
+        {/* Anti-Brute-Force Lockout Banner */}
+        {rateLimit.isLocked && (
+          <div className="bg-rose-50 border border-rose-200 rounded-xl p-3 flex items-start gap-2.5 text-xs text-rose-900 animate-pulse">
+            <ShieldAlert className="w-4 h-4 text-rose-600 shrink-0 mt-0.5" />
+            <div className="text-[11px]">
+              <span className="font-bold">Anti-Brute-Force Lockout Active</span>
+              <p className="text-[10px] text-rose-700 mt-0.5">
+                Multiple invalid verification attempts detected. Submissions are temporarily blocked for <strong className="font-mono text-rose-900">{rateLimit.remainingLockoutSeconds}s</strong>.
+              </p>
+            </div>
+          </div>
+        )}
+
         {/* Option 1: Secret Token Form */}
         <form onSubmit={handleTokenSubmit} className="space-y-3 pt-1">
           <div>
@@ -112,13 +146,14 @@ export const BookingAuthModal: React.FC<BookingAuthModalProps> = ({
               <Key className="w-4 h-4 text-slate-400 absolute left-3 top-2.5" />
               <input
                 type="text"
+                disabled={rateLimit.isLocked}
                 value={tokenInput}
                 onChange={(e) => {
                   setTokenInput(e.target.value);
                   setErrorMsg('');
                 }}
-                placeholder="e.g. SEC-A93F-K82L"
-                className="w-full bg-slate-50 border border-slate-200 rounded-xl pl-9 pr-3.5 py-2 text-xs font-mono font-bold text-slate-800 uppercase placeholder:normal-case placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:bg-white"
+                placeholder={rateLimit.isLocked ? `Locked (${rateLimit.remainingLockoutSeconds}s)` : "e.g. SEC-A93F-K82L"}
+                className="w-full bg-slate-50 border border-slate-200 rounded-xl pl-9 pr-3.5 py-2 text-xs font-mono font-bold text-slate-800 uppercase placeholder:normal-case placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:bg-white disabled:opacity-50"
               />
             </div>
             {errorMsg && (
@@ -130,10 +165,10 @@ export const BookingAuthModal: React.FC<BookingAuthModalProps> = ({
 
           <button
             type="submit"
-            disabled={isVerifying}
+            disabled={isVerifying || rateLimit.isLocked}
             className="w-full bg-indigo-600 hover:bg-indigo-700 text-white font-extrabold text-xs uppercase tracking-wider py-2.5 rounded-xl transition-colors shadow-xs flex items-center justify-center gap-1.5 cursor-pointer disabled:opacity-50"
           >
-            <span>Verify & Unlock Booking</span>
+            <span>{rateLimit.isLocked ? `Locked (${rateLimit.remainingLockoutSeconds}s)` : 'Verify & Unlock Booking'}</span>
             <ArrowRight className="w-3.5 h-3.5" />
           </button>
         </form>

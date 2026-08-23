@@ -3,7 +3,7 @@ import {
   ChevronLeft, ChevronRight, Calendar as CalendarIcon, Clock, Users, Plus, 
   CheckCircle2, Sparkles, Filter, AlertCircle, ArrowUpRight
 } from 'lucide-react';
-import { Room, Booking } from '../types';
+import { Room, Booking, BlockedDate, Tenant } from '../types';
 import { 
   getWeekDates, formatWeekRange, addDaysToDate, formatDateToISO, 
   timeToMinutes, getBookingStatus 
@@ -19,6 +19,8 @@ interface WeeklyScheduleViewProps {
   currentUserUid?: string;
   onCancelBooking?: (bookingId: string) => void;
   onSwitchToDayView?: (date: string) => void;
+  blockedDates?: BlockedDate[];
+  currentTenant?: Tenant | null;
 }
 
 export const WeeklyScheduleView: React.FC<WeeklyScheduleViewProps> = ({
@@ -31,9 +33,22 @@ export const WeeklyScheduleView: React.FC<WeeklyScheduleViewProps> = ({
   currentUserUid,
   onCancelBooking,
   onSwitchToDayView,
+  blockedDates = [],
+  currentTenant = null,
 }) => {
   const [selectedRoomId, setSelectedRoomId] = useState<string>('all');
   const [viewLayout, setViewLayout] = useState<'grid' | 'timeline'>('timeline');
+
+  const getHolidayForDay = (dateStr: string): BlockedDate | null => {
+    return blockedDates.find(b => {
+      if (!b.active) return false;
+      const matchesTenant = b.tenantId === 'ALL' || b.tenantId === currentTenant?.id;
+      if (!matchesTenant) return false;
+      if (b.date === dateStr) return true;
+      if (b.endDate && dateStr >= b.date && dateStr <= b.endDate) return true;
+      return false;
+    }) || null;
+  };
 
   const weekDays = getWeekDates(selectedDate, selectedDate);
   const weekRangeLabel = formatWeekRange(weekDays);
@@ -185,22 +200,32 @@ export const WeeklyScheduleView: React.FC<WeeklyScheduleViewProps> = ({
                 <div className="text-slate-400 border-r border-slate-200 flex items-center justify-center">
                   TIME
                 </div>
-                {weekDays.map(day => (
-                  <div 
-                    key={day.dateStr}
-                    onClick={() => onSelectDate(day.dateStr)}
-                    className={`px-1 py-1 cursor-pointer transition-colors border-r last:border-r-0 border-slate-200 ${
-                      day.isSelected ? 'bg-indigo-50/80 text-indigo-900 font-black' : 'hover:bg-slate-100'
-                    }`}
-                  >
-                    <div className="uppercase tracking-wider">{day.shortDay}</div>
-                    <div className={`text-xs inline-block px-1.5 py-0.5 rounded-full font-bold mt-0.5 ${
-                      day.isToday ? 'bg-indigo-600 text-white' : ''
-                    }`}>
-                      {day.dayNum}
+                {weekDays.map(day => {
+                  const dayHoliday = getHolidayForDay(day.dateStr);
+                  return (
+                    <div 
+                      key={day.dateStr}
+                      onClick={() => onSelectDate(day.dateStr)}
+                      className={`px-1 py-1 cursor-pointer transition-colors border-r last:border-r-0 border-slate-200 ${
+                        day.isSelected ? 'bg-indigo-50/80 text-indigo-900 font-black' : dayHoliday ? (dayHoliday.type === 'public_holiday' ? 'bg-emerald-50/40' : 'bg-violet-50/40') : 'hover:bg-slate-100'
+                      }`}
+                    >
+                      <div className="uppercase tracking-wider flex items-center justify-center gap-1">
+                        <span>{day.shortDay}</span>
+                        {dayHoliday && (
+                          <span title={`${dayHoliday.title} (${dayHoliday.type === 'public_holiday' ? 'Public Holiday' : 'Replacement Leave'})`}>
+                            {dayHoliday.type === 'public_holiday' ? '🌴' : '🏖️'}
+                          </span>
+                        )}
+                      </div>
+                      <div className={`text-xs inline-block px-1.5 py-0.5 rounded-full font-bold mt-0.5 ${
+                        day.isToday ? 'bg-indigo-600 text-white' : ''
+                      }`}>
+                        {day.dayNum}
+                      </div>
                     </div>
-                  </div>
-                ))}
+                  );
+                })}
               </div>
 
               {/* Rows: Each hour */}
@@ -293,6 +318,8 @@ export const WeeklyScheduleView: React.FC<WeeklyScheduleViewProps> = ({
             const busyRoomIds = new Set(floorDayBookings.map(b => b.roomId));
             const availableRoomsCount = activeRooms.length - busyRoomIds.size;
 
+            const dayHoliday = getHolidayForDay(day.dateStr);
+
             return (
               <div 
                 key={day.dateStr}
@@ -310,15 +337,27 @@ export const WeeklyScheduleView: React.FC<WeeklyScheduleViewProps> = ({
                       ? 'bg-indigo-600 text-white' 
                       : day.isSelected 
                       ? 'bg-indigo-50 border-indigo-100 text-indigo-900' 
+                      : dayHoliday
+                      ? (dayHoliday.type === 'public_holiday' ? 'bg-emerald-50/90 border-emerald-200 text-emerald-950' : 'bg-violet-50/90 border-violet-200 text-violet-950')
                       : 'bg-slate-100/80 border-slate-200 text-slate-800'
                   }`}
                 >
                   <div>
-                    <div className="text-[10px] font-bold uppercase tracking-wider font-mono">
-                      {day.shortDay}
+                    <div className="text-[10px] font-bold uppercase tracking-wider font-mono flex items-center gap-1">
+                      <span>{day.shortDay}</span>
+                      {dayHoliday && (
+                        <span className="text-[10px]" title={`${dayHoliday.title} (${dayHoliday.type === 'public_holiday' ? 'Public Holiday' : 'Replacement Leave'})`}>
+                          {dayHoliday.type === 'public_holiday' ? '🌴' : '🏖️'}
+                        </span>
+                      )}
                     </div>
-                    <div className="text-base font-black leading-none mt-0.5">
-                      {day.dayNum}
+                    <div className="text-base font-black leading-none mt-0.5 flex items-center gap-1.5">
+                      <span>{day.dayNum}</span>
+                      {dayHoliday && (
+                        <span className="text-[9px] font-normal truncate max-w-[85px] opacity-80">
+                          {dayHoliday.title}
+                        </span>
+                      )}
                     </div>
                   </div>
 

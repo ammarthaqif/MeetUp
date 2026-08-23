@@ -5,6 +5,7 @@ import {
   Shield, UserCheck, X, Building2, Crown
 } from 'lucide-react';
 import { ApprovedUser, AccessKey, Tenant } from '../types';
+import { evaluateTokenStrength } from '../utils/security';
 
 interface AdminAccessControlProps {
   approvedUsers: ApprovedUser[];
@@ -630,11 +631,16 @@ export const AdminAccessControl: React.FC<AdminAccessControlProps> = ({
               <div className="border-b border-slate-200/60 pb-2.5">
                 <span className="text-xs font-bold text-slate-800 uppercase tracking-tight flex items-center gap-1.5 font-sans">
                   <Key className="w-4 h-4 text-indigo-600" />
-                  Generate Secret Access Token
+                  Generate Cryptographically Secure Token
                 </span>
                 <p className="text-[10px] text-slate-500 font-sans mt-0.5">
-                  Issue secure keys for contractors, visitors, or temporary teams.
+                  High-entropy Web Crypto CSPRNG tokens with anti-brute force rate limiting.
                 </p>
+              </div>
+
+              <div className="p-2.5 rounded-xl bg-indigo-50/70 border border-indigo-100 text-[11px] text-indigo-900 flex items-center gap-2">
+                <ShieldCheck className="w-4 h-4 text-indigo-600 shrink-0" />
+                <span>Protected against dictionary & brute-force dictionary attacks.</span>
               </div>
 
               <form onSubmit={handleGenerateKeySubmit} className="space-y-3">

@@ -4,7 +4,7 @@ import {
   Lock, ShieldCheck, ShieldAlert, Layers, Sparkles, ArrowRight, CheckCircle2,
   Repeat, CalendarRange, Check, AlertCircle, RefreshCw, ChevronRight, Zap
 } from 'lucide-react';
-import { Room, Booking } from '../types';
+import { Room, Booking, BlockedDate, Tenant } from '../types';
 import { 
   isRoomAvailable, 
   timeToMinutes, 
@@ -34,6 +34,8 @@ interface BookingModalProps {
   bookings: Booking[]; // Used for live conflict checking
   googleSyncAvailable: boolean;
   adminEmail?: string;
+  blockedDates?: BlockedDate[];
+  currentTenant?: Tenant | null;
 }
 
 export const BookingModal: React.FC<BookingModalProps> = ({
@@ -50,6 +52,8 @@ export const BookingModal: React.FC<BookingModalProps> = ({
   bookings,
   googleSyncAvailable,
   adminEmail = 'admin@enterprise.internal',
+  blockedDates = [],
+  currentTenant = null,
 }) => {
   const [roomId, setRoomId] = useState('');
   const [date, setDate] = useState('');
@@ -236,6 +240,43 @@ export const BookingModal: React.FC<BookingModalProps> = ({
 
     return viableRooms.sort((a, b) => a.conflictCount - b.conflictCount);
   }, [isRecurring, includedDates, startTime, endTime, bookings, editingBooking, rooms, roomId, activeIncludedConflicts.length]);
+
+  // -------------------------------------------------------------------------
+  // Holiday & Company Replacement Leave Awareness Engine
+  // -------------------------------------------------------------------------
+  const getHolidayForDate = (checkDate: string): BlockedDate | null => {
+    if (!checkDate || !blockedDates) return null;
+    return blockedDates.find(b => {
+      if (!b.active) return false;
+      const matchesTenant = b.tenantId === 'ALL' || b.tenantId === currentTenant?.id;
+      if (!matchesTenant) return false;
+      if (b.date === checkDate) return true;
+      if (b.endDate && checkDate >= b.date && checkDate <= b.endDate) return true;
+      return false;
+    }) || null;
+  };
+
+  const selectedDateHoliday = useMemo(() => {
+    return getHolidayForDate(date);
+  }, [date, blockedDates, currentTenant]);
+
+  const seriesHolidayMap = useMemo(() => {
+    const map = new Map<string, BlockedDate>();
+    for (const d of generatedSeriesDates) {
+      const h = getHolidayForDate(d);
+      if (h) map.set(d, h);
+    }
+    return map;
+  }, [generatedSeriesDates, blockedDates, currentTenant]);
+
+  const activeIncludedHolidays = useMemo(() => {
+    return includedDates.filter(d => seriesHolidayMap.has(d));
+  }, [includedDates, seriesHolidayMap]);
+
+  const handleExcludeHolidayDates = () => {
+    const cleanDates = includedDates.filter(d => !seriesHolidayMap.has(d));
+    setIncludedDates(cleanDates);
+  };
 
   // Live conflict checking
   useEffect(() => {
@@ -454,6 +495,14 @@ export const BookingModal: React.FC<BookingModalProps> = ({
         return;
       }
 
+      // Check if any selected date is a strict hard block holiday
+      const hardBlockedSelected = includedDates.filter(d => seriesHolidayMap.get(d)?.isHardBlock);
+      if (hardBlockedSelected.length > 0) {
+        const firstHard = seriesHolidayMap.get(hardBlockedSelected[0]);
+        setErrorMessage(`Cannot book series: ${hardBlockedSelected.length} selected session(s) (${firstHard?.title} on ${hardBlockedSelected[0]}) have strict holiday booking lockouts. Click "Exclude Holidays" to proceed.`);
+        return;
+      }
+
       // Check conflicts among included dates
       const conflictingSelected = includedDates.filter(d => seriesDateConflictMap.has(d));
       if (conflictingSelected.length > 0) {
@@ -463,7 +512,17 @@ export const BookingModal: React.FC<BookingModalProps> = ({
 
       multiDates = includedDates;
       confirmMessage = `Are you sure you want to book "${title.trim()}" in ${currentRoom?.name} for ${startTime} - ${endTime} across ${includedDates.length} recurring dates (${includedDates[0]} to ${includedDates[includedDates.length - 1]})?`;
+      
+      if (activeIncludedHolidays.length > 0) {
+        confirmMessage += `\n\n⚠️ Holiday Notice: ${activeIncludedHolidays.length} selected dates fall on gazetted holidays / replacement leave.`;
+      }
     } else {
+      // Check hard block holiday for single date
+      if (selectedDateHoliday?.isHardBlock) {
+        setErrorMessage(`Room booking locked: ${selectedDateHoliday.title} on ${formatFriendlyDate(date)} is designated as a strict non-booking holiday/closure.`);
+        return;
+      }
+
       // Single day check
       const available = isRoomAvailable(
         roomId,
@@ -477,6 +536,10 @@ export const BookingModal: React.FC<BookingModalProps> = ({
       if (!available) {
         setErrorMessage('The selected room is occupied at this time. Please choose another time slot.');
         return;
+      }
+
+      if (selectedDateHoliday) {
+        confirmMessage += `\n\n🌴 Notice: ${formatFriendlyDate(date)} is marked as ${selectedDateHoliday.type === 'public_holiday' ? 'Public Holiday' : 'Company Replacement Leave'} ("${selectedDateHoliday.title}").`;
       }
     }
 
@@ -681,6 +744,77 @@ export const BookingModal: React.FC<BookingModalProps> = ({
               </div>
             </div>
           </div>
+
+          {/* Holiday / Replacement Leave Notification Banner (Single Date Mode) */}
+          {!isRecurring && selectedDateHoliday && (
+            <div className={`p-4 rounded-2xl border transition-all space-y-2.5 animate-in fade-in zoom-in-95 duration-200 ${
+              selectedDateHoliday.isHardBlock
+                ? 'bg-rose-50 border-rose-300 text-rose-950'
+                : selectedDateHoliday.type === 'public_holiday'
+                ? 'bg-emerald-50 border-emerald-300 text-emerald-950'
+                : selectedDateHoliday.type === 'replacement_leave'
+                ? 'bg-violet-50 border-violet-300 text-violet-950'
+                : 'bg-amber-50 border-amber-300 text-amber-950'
+            }`}>
+              <div className="flex items-start justify-between gap-3">
+                <div className="flex items-center gap-2.5">
+                  <span className="text-2xl shrink-0">
+                    {selectedDateHoliday.type === 'public_holiday' ? '🌴' : selectedDateHoliday.type === 'replacement_leave' ? '🏖️' : '🏢'}
+                  </span>
+                  <div>
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <span className="text-xs font-black uppercase font-mono tracking-tight">
+                        {selectedDateHoliday.type === 'public_holiday'
+                          ? 'Gazetted Public Holiday'
+                          : selectedDateHoliday.type === 'replacement_leave'
+                          ? 'Company Replacement Leave (In-Lieu)'
+                          : 'Company Office Closure'}
+                      </span>
+                      <span className={`text-[10px] font-mono px-2 py-0.5 rounded font-bold uppercase ${
+                        selectedDateHoliday.type === 'public_holiday'
+                          ? 'bg-emerald-200 text-emerald-900'
+                          : selectedDateHoliday.type === 'replacement_leave'
+                          ? 'bg-violet-200 text-violet-900'
+                          : 'bg-amber-200 text-amber-900'
+                      }`}>
+                        {selectedDateHoliday.tenantId === 'ALL' ? 'Global Gazetted' : currentTenant?.name || 'Company Specific'}
+                      </span>
+                      {selectedDateHoliday.isHardBlock && (
+                        <span className="text-[10px] bg-rose-200 text-rose-900 font-mono px-2 py-0.5 rounded font-black uppercase">
+                          Strict Non-Booking Lockout
+                        </span>
+                      )}
+                    </div>
+                    <div className="text-sm font-bold mt-0.5 text-slate-900">
+                      {selectedDateHoliday.title}
+                    </div>
+                  </div>
+                </div>
+                <span className="text-[11px] font-mono font-bold text-slate-500 shrink-0">
+                  {formatFriendlyDate(date)}
+                </span>
+              </div>
+
+              {selectedDateHoliday.description && (
+                <p className="text-xs opacity-90 leading-relaxed pl-9">
+                  {selectedDateHoliday.description}
+                </p>
+              )}
+
+              <div className={`text-[11px] font-medium rounded-xl p-2.5 flex items-center gap-2 ${
+                selectedDateHoliday.isHardBlock
+                  ? 'bg-rose-100/80 text-rose-900 font-semibold'
+                  : 'bg-white/80 text-slate-700 border border-slate-200/60'
+              }`}>
+                <Info className="w-4 h-4 shrink-0 text-slate-600" />
+                <span>
+                  {selectedDateHoliday.isHardBlock
+                    ? 'Room bookings are strictly disabled on this holiday / closure. Please choose another working date.'
+                    : `Please note: The selected date is on a ${selectedDateHoliday.type === 'public_holiday' ? 'public holiday' : 'company replacement leave'}. Ensure all meeting attendees and office building access are confirmed.`}
+                </span>
+              </div>
+            </div>
+          )}
 
           {/* Times Selection */}
           <div className="grid grid-cols-2 gap-4">
@@ -1088,21 +1222,37 @@ export const BookingModal: React.FC<BookingModalProps> = ({
                             Generated Recurring Schedule ({includedDates.length} of {generatedSeriesDates.length} Selected)
                           </span>
                         </div>
-                        <p className="text-[10px] text-slate-400 mt-0.5">
+                        <div className="text-[10px] mt-0.5 space-y-0.5">
                           {activeIncludedConflicts.length === 0 ? (
                             <span className="text-emerald-400 font-bold flex items-center gap-1">
                               <Check className="w-3 h-3" /> All {includedDates.length} selected sessions are 100% available!
                             </span>
                           ) : (
                             <span className="text-rose-400 font-bold flex items-center gap-1">
-                              <AlertCircle className="w-3 h-3" /> {activeIncludedConflicts.length} of {includedDates.length} selected sessions have booking conflicts!
+                              <AlertCircle className="w-3 h-3" /> {activeIncludedConflicts.length} of {includedDates.length} selected sessions have room conflicts!
                             </span>
                           )}
-                        </p>
+                          {activeIncludedHolidays.length > 0 && (
+                            <div className="text-amber-300 font-bold flex items-center gap-1">
+                              <span>🌴</span>
+                              <span>{activeIncludedHolidays.length} selected date(s) are on public holidays or company replacement leave.</span>
+                            </div>
+                          )}
+                        </div>
                       </div>
 
                       {/* Smart Filter Buttons */}
-                      <div className="flex items-center gap-1.5">
+                      <div className="flex items-center gap-1.5 flex-wrap">
+                        {activeIncludedHolidays.length > 0 && (
+                          <button
+                            type="button"
+                            onClick={handleExcludeHolidayDates}
+                            className="px-2.5 py-1 bg-amber-600 hover:bg-amber-500 text-white text-[10px] font-bold rounded-lg transition-all cursor-pointer flex items-center gap-1 shadow-xs"
+                            title="Uncheck dates falling on holidays or replacement leave"
+                          >
+                            <span>🌴 Exclude Holidays ({activeIncludedHolidays.length})</span>
+                          </button>
+                        )}
                         {activeIncludedConflicts.length > 0 && (
                           <button
                             type="button"
@@ -1129,6 +1279,7 @@ export const BookingModal: React.FC<BookingModalProps> = ({
                         const isIncluded = includedDates.includes(dStr);
                         const conflicts = seriesDateConflictMap.get(dStr);
                         const hasConflict = !!conflicts && conflicts.length > 0;
+                        const dateHoliday = seriesHolidayMap.get(dStr);
 
                         return (
                           <div
@@ -1139,7 +1290,11 @@ export const BookingModal: React.FC<BookingModalProps> = ({
                                 ? 'bg-slate-800/40 border-slate-800 text-slate-500 opacity-60'
                                 : hasConflict
                                   ? 'bg-rose-950/40 border-rose-800/80 text-rose-200'
-                                  : 'bg-slate-800/80 border-slate-700 text-slate-200 hover:border-slate-600'
+                                  : dateHoliday
+                                    ? dateHoliday.type === 'public_holiday'
+                                      ? 'bg-emerald-950/30 border-emerald-800/60 text-emerald-200'
+                                      : 'bg-violet-950/30 border-violet-800/60 text-violet-200'
+                                    : 'bg-slate-800/80 border-slate-700 text-slate-200 hover:border-slate-600'
                             }`}
                           >
                             <div className="flex items-center gap-2">
@@ -1159,6 +1314,17 @@ export const BookingModal: React.FC<BookingModalProps> = ({
                               <span className="text-[10px] font-mono text-slate-400">
                                 ({dStr})
                               </span>
+                              {dateHoliday && (
+                                <span className={`text-[9px] font-bold px-1.5 py-0.5 rounded flex items-center gap-1 font-mono uppercase ${
+                                  dateHoliday.type === 'public_holiday'
+                                    ? 'bg-emerald-900/60 text-emerald-300 border border-emerald-700'
+                                    : 'bg-violet-900/60 text-violet-300 border border-violet-700'
+                                }`} title={dateHoliday.description || dateHoliday.title}>
+                                  <span>{dateHoliday.type === 'public_holiday' ? '🌴' : '🏖️'}</span>
+                                  <span className="truncate max-w-[110px]">{dateHoliday.title}</span>
+                                  {dateHoliday.isHardBlock && <span className="text-rose-400">(Locked)</span>}
+                                </span>
+                              )}
                             </div>
 
                             <div className="flex items-center gap-2">

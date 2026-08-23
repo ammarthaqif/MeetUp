@@ -99,6 +99,28 @@ export interface AccessKey {
   active: boolean;
 }
 
+export type BlockedDateType = 
+  | 'public_holiday' 
+  | 'replacement_leave' 
+  | 'company_closure' 
+  | 'maintenance' 
+  | 'other';
+
+export interface BlockedDate {
+  id: string;
+  tenantId: string; // 'ALL' for global public holidays (super admin), or specific tenantId (e.g. 'tenant-acme')
+  date: string; // YYYY-MM-DD
+  endDate?: string; // YYYY-MM-DD (for multi-day holidays/closures)
+  title: string; // e.g. "Labor Day", "National Day Replacement Leave"
+  type: BlockedDateType;
+  description?: string;
+  isHardBlock?: boolean; // If true, strictly prevent booking; if false (default), notify/warn user
+  importedAt: number;
+  importedBy?: string;
+  sourceIcsFilename?: string;
+  active: boolean;
+}
+
 export type AuditActionType = 
   | 'BOOKING_CREATED'
   | 'BOOKING_UPDATED'
@@ -114,7 +136,12 @@ export type AuditActionType =
   | 'TENANT_CREATED'
   | 'TENANT_UPDATED'
   | 'TENANT_DELETED'
-  | 'TENANT_SWITCHED';
+  | 'TENANT_SWITCHED'
+  | 'SECURITY_ALERT'
+  | 'HOLIDAY_IMPORTED'
+  | 'HOLIDAY_CREATED'
+  | 'HOLIDAY_UPDATED'
+  | 'HOLIDAY_DELETED';
 
 export interface AuditLog {
   id: string;

@@ -3,7 +3,7 @@ import {
   ChevronLeft, ChevronRight, Calendar as CalendarIcon, Clock, Users, Plus, 
   CheckCircle2, Sparkles, Filter, AlertCircle, ArrowUpRight, Check, Flame
 } from 'lucide-react';
-import { Room, Booking } from '../types';
+import { Room, Booking, BlockedDate, Tenant } from '../types';
 import { 
   getMonthCalendarGrid, formatMonthYear, addMonthsToDate, formatDateToISO, 
   parseISODate, formatFriendlyDate, getBookingStatus 
@@ -19,6 +19,8 @@ interface MonthlyAvailabilityViewProps {
   currentUserUid?: string;
   onCancelBooking?: (bookingId: string) => void;
   onSwitchToDayView?: (date: string) => void;
+  blockedDates?: BlockedDate[];
+  currentTenant?: Tenant | null;
 }
 
 export const MonthlyAvailabilityView: React.FC<MonthlyAvailabilityViewProps> = ({
@@ -31,9 +33,24 @@ export const MonthlyAvailabilityView: React.FC<MonthlyAvailabilityViewProps> = (
   currentUserUid,
   onCancelBooking,
   onSwitchToDayView,
+  blockedDates = [],
+  currentTenant = null,
 }) => {
   const [selectedRoomId, setSelectedRoomId] = useState<string>('all');
   const [viewedMonthDate, setViewedMonthDate] = useState<string>(selectedDate);
+
+  const getHolidayForDay = (dateStr: string): BlockedDate | null => {
+    return blockedDates.find(b => {
+      if (!b.active) return false;
+      const matchesTenant = b.tenantId === 'ALL' || b.tenantId === currentTenant?.id;
+      if (!matchesTenant) return false;
+      if (b.date === dateStr) return true;
+      if (b.endDate && dateStr >= b.date && dateStr <= b.endDate) return true;
+      return false;
+    }) || null;
+  };
+
+  const selectedDateHoliday = getHolidayForDay(selectedDate);
 
   const monthLabel = formatMonthYear(viewedMonthDate);
   const calendarGrid = getMonthCalendarGrid(viewedMonthDate, selectedDate);
@@ -163,6 +180,7 @@ export const MonthlyAvailabilityView: React.FC<MonthlyAvailabilityViewProps> = (
             const hasBookings = dayBookings.length > 0;
             const isBusy = dayBookings.length >= 3;
             const isSelected = day.dateStr === selectedDate;
+            const cellHoliday = getHolidayForDay(day.dateStr);
 
             return (
               <div
@@ -179,22 +197,31 @@ export const MonthlyAvailabilityView: React.FC<MonthlyAvailabilityViewProps> = (
                     ? 'bg-slate-50/50 text-slate-300' 
                     : isSelected 
                     ? 'bg-indigo-50/40 ring-1 ring-inset ring-indigo-500' 
+                    : cellHoliday
+                    ? cellHoliday.type === 'public_holiday' ? 'bg-emerald-50/40 hover:bg-emerald-50/70' : 'bg-violet-50/40 hover:bg-violet-50/70'
                     : 'bg-white hover:bg-slate-50'
                 }`}
               >
                 {/* Day Cell Top: Date Number & Activity Dot */}
                 <div className="flex items-center justify-between">
-                  <span className={`text-xs font-bold font-mono inline-flex items-center justify-center w-5 h-5 rounded-full ${
-                    day.isToday 
-                      ? 'bg-indigo-600 text-white' 
-                      : isSelected 
-                      ? 'bg-indigo-100 text-indigo-800' 
-                      : day.isCurrentMonth 
-                      ? 'text-slate-700' 
-                      : 'text-slate-300'
-                  }`}>
-                    {day.dayNum}
-                  </span>
+                  <div className="flex items-center gap-1">
+                    <span className={`text-xs font-bold font-mono inline-flex items-center justify-center w-5 h-5 rounded-full ${
+                      day.isToday 
+                        ? 'bg-indigo-600 text-white' 
+                        : isSelected 
+                        ? 'bg-indigo-100 text-indigo-800' 
+                        : day.isCurrentMonth 
+                        ? 'text-slate-700' 
+                        : 'text-slate-300'
+                    }`}>
+                      {day.dayNum}
+                    </span>
+                    {cellHoliday && day.isCurrentMonth && (
+                      <span className="text-[10px]" title={`${cellHoliday.title} (${cellHoliday.type === 'public_holiday' ? 'Public Holiday' : 'Replacement Leave'})`}>
+                        {cellHoliday.type === 'public_holiday' ? '🌴' : '🏖️'}
+                      </span>
+                    )}
+                  </div>
 
                   {day.isCurrentMonth && (
                     <div className="flex items-center gap-1">
@@ -210,6 +237,17 @@ export const MonthlyAvailabilityView: React.FC<MonthlyAvailabilityViewProps> = (
                     </div>
                   )}
                 </div>
+
+                {/* Holiday label in cell if space */}
+                {cellHoliday && day.isCurrentMonth && (
+                  <div className={`text-[8px] font-bold truncate px-1 py-0.5 rounded border ${
+                    cellHoliday.type === 'public_holiday'
+                      ? 'bg-emerald-100/70 text-emerald-900 border-emerald-200/80'
+                      : 'bg-violet-100/70 text-violet-900 border-violet-200/80'
+                  }`}>
+                    {cellHoliday.title}
+                  </div>
+                )}
 
                 {/* Day Cell Middle: Mini booking chips */}
                 <div className="my-1 space-y-0.5 overflow-hidden">
@@ -271,6 +309,39 @@ export const MonthlyAvailabilityView: React.FC<MonthlyAvailabilityViewProps> = (
       {/* Selected Day Inspector / Detailed Room Breakdown Panel */}
       <div className="bg-slate-50 border border-slate-200 rounded-lg p-3.5 space-y-3">
         
+        {/* Holiday / Replacement Leave Alert Banner */}
+        {selectedDateHoliday && (
+          <div className={`p-3 rounded-xl border flex items-center justify-between gap-3 text-xs ${
+            selectedDateHoliday.type === 'public_holiday'
+              ? 'bg-emerald-50 border-emerald-200 text-emerald-950'
+              : 'bg-violet-50 border-violet-200 text-violet-950'
+          }`}>
+            <div className="flex items-center gap-2.5">
+              <span className="text-xl shrink-0">{selectedDateHoliday.type === 'public_holiday' ? '🌴' : '🏖️'}</span>
+              <div>
+                <div className="flex items-center gap-2">
+                  <span className="font-extrabold uppercase font-sans tracking-tight">
+                    {selectedDateHoliday.type === 'public_holiday' ? 'Gazetted Public Holiday' : 'Company Replacement Leave'}
+                  </span>
+                  <span className={`text-[10px] font-mono px-2 py-0.5 rounded font-bold uppercase ${
+                    selectedDateHoliday.type === 'public_holiday' ? 'bg-emerald-200 text-emerald-900' : 'bg-violet-200 text-violet-900'
+                  }`}>
+                    {selectedDateHoliday.tenantId === 'ALL' ? 'Gazetted' : currentTenant?.name || 'Company Specific'}
+                  </span>
+                </div>
+                <p className="text-[11px] opacity-90 mt-0.5">
+                  <strong className="font-bold">{selectedDateHoliday.title}</strong> — {selectedDateHoliday.description || 'Marked as company block date.'}
+                </p>
+              </div>
+            </div>
+            {selectedDateHoliday.isHardBlock && (
+              <span className="text-[10px] font-mono bg-rose-100 text-rose-800 border border-rose-200 px-2 py-1 rounded font-bold">
+                Booking Strictly Locked
+              </span>
+            )}
+          </div>
+        )}
+
         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-slate-200 pb-2">
           <div className="flex items-center gap-2">
             <CalendarIcon className="w-4 h-4 text-indigo-600" />

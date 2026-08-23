@@ -30,8 +30,16 @@ import { TenantPortalGate } from './components/TenantPortalGate';
 import { TenantSwitcherModal } from './components/TenantSwitcherModal';
 
 // Types and Utilities
-import { Booking, Room, Office, ApprovedUser, AccessKey, AuditLog, AuditActionType, Tenant, TenantRole } from './types';
+import { Booking, Room, Office, ApprovedUser, AccessKey, AuditLog, AuditActionType, Tenant, TenantRole, BlockedDate } from './types';
 import { formatFriendlyDate, timeToMinutes } from './utils';
+import { DEFAULT_SEED_BLOCKED_DATES } from './utils/icsHolidayParser';
+import { 
+  generateSecureToken, 
+  timingSafeEqual, 
+  getRateLimitStatus, 
+  recordFailedAttempt, 
+  resetRateLimit 
+} from './utils/security';
 import { 
   DEFAULT_TENANTS, 
   DEFAULT_TENANT_ACCESS_KEYS, 
@@ -191,6 +199,24 @@ export default function App() {
       return ['ACME-CORP-2025', 'MASTER-PLATFORM-ADMIN-2026'];
     }
   });
+
+  // Blocked Dates (Gazetted Public Holidays & Corporate Replacement Leaves from .ics)
+  const [blockedDates, setBlockedDates] = useState<BlockedDate[]>(() => {
+    try {
+      const saved = localStorage.getItem('office_sync_blocked_dates');
+      return saved ? JSON.parse(saved) : DEFAULT_SEED_BLOCKED_DATES;
+    } catch {
+      return DEFAULT_SEED_BLOCKED_DATES;
+    }
+  });
+
+  useEffect(() => {
+    try {
+      localStorage.setItem('office_sync_blocked_dates', JSON.stringify(blockedDates));
+    } catch (e) {
+      console.error('Failed to persist blockedDates', e);
+    }
+  }, [blockedDates]);
 
   // Active Workspace State
   const [activeOffice, setActiveOffice] = useState<Office | null>(() => {
@@ -435,7 +461,7 @@ export default function App() {
     });
 
     // Auto-select first office belonging to this tenant
-    const tenantOffices = offices.filter(o => !o.tenantId || o.tenantId === tenant.id);
+    const tenantOffices = offices.filter(o => o.tenantId === tenant.id);
     if (tenantOffices.length > 0) {
       setActiveOffice(tenantOffices[0]);
       setSelectedFloor(tenantOffices[0].floors[0] || 1);
@@ -478,7 +504,7 @@ export default function App() {
       setTenantAccessToken(token);
     }
     
-    const tenantOffices = offices.filter(o => !o.tenantId || o.tenantId === tenant.id);
+    const tenantOffices = offices.filter(o => o.tenantId === tenant.id);
     if (tenantOffices.length > 0) {
       setActiveOffice(tenantOffices[0]);
       setSelectedFloor(tenantOffices[0].floors[0] || 1);
@@ -557,7 +583,7 @@ export default function App() {
 
     // Auto-issue Company Admin Access Key & Whitelist for assigned admin
     if (!isExisting) {
-      const adminToken = extraConfig?.initialAdminToken || `${tenantData.code}-ADMIN-${Math.floor(1000 + Math.random() * 9000)}`;
+      const adminToken = extraConfig?.initialAdminToken || generateSecureToken(tenantData.code, 'ADMIN');
       const keyId = `key-${Date.now()}`;
       const newKey: AccessKey = {
         id: keyId,
@@ -642,11 +668,11 @@ export default function App() {
   const handleGenerateTenantToken = async (tenantId: string, label: string, role: 'company_admin' | 'staff' | 'guest'): Promise<AccessKey> => {
     const tenant = tenants.find(t => t.id === tenantId) || DEFAULT_TENANTS.find(t => t.id === tenantId);
     const prefix = tenant ? tenant.code : 'CORP';
-    const randomSuffix = Math.floor(1000 + Math.random() * 9000);
-    const tokenString = `${prefix}-${role.toUpperCase().replace('_', '')}-${randomSuffix}`;
+    const roleSlug = role === 'company_admin' ? 'ADMIN' : role === 'guest' ? 'GUEST' : 'STAFF';
+    const tokenString = generateSecureToken(prefix, roleSlug);
     
     const newKey: AccessKey = {
-      id: `key-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
+      id: `key-${Date.now()}-${generateSecureToken('ID', 'KEY', 1).split('-')[2]}`,
       tenantId,
       token: tokenString,
       label,
@@ -1003,14 +1029,21 @@ export default function App() {
       .toUpperCase();
     if (!cleanToken) return false;
 
+    // 0. Anti-Brute-Force Rate Limiting Check
+    const rateStatus = getRateLimitStatus();
+    if (rateStatus.isLocked) {
+      showNotification('error', `Security Lockout: Too many invalid attempts. Try again in ${rateStatus.remainingLockoutSeconds}s.`);
+      return false;
+    }
+
     const today = new Date().toISOString().split('T')[0];
     const cleanAlphaNumeric = cleanToken.replace(/[^A-Z0-9]/g, '');
 
-    // 1. Live keys search (exact & alphanumeric)
+    // 1. Live keys search (timing-safe exact & normalized check)
     let matchingKey = accessKeys.find(k => 
       k.active && (
-        k.token.trim().toUpperCase() === cleanToken ||
-        k.token.replace(/[^A-Z0-9]/g, '') === cleanAlphaNumeric
+        timingSafeEqual(k.token, cleanToken) ||
+        timingSafeEqual(k.token.replace(/[^A-Z0-9]/g, ''), cleanAlphaNumeric)
       )
     );
     
@@ -1018,56 +1051,32 @@ export default function App() {
     if (!matchingKey) {
       matchingKey = DEFAULT_TENANT_ACCESS_KEYS.find(k => 
         k.active && (
-          k.token.trim().toUpperCase() === cleanToken ||
-          k.token.replace(/[^A-Z0-9]/g, '') === cleanAlphaNumeric
+          timingSafeEqual(k.token, cleanToken) ||
+          timingSafeEqual(k.token.replace(/[^A-Z0-9]/g, ''), cleanAlphaNumeric)
         )
       );
     }
 
-    // 3. Tenant matching
     if (!matchingKey) {
-      const matchingTenant = tenants.find(
-        t => cleanToken.startsWith(`${t.code.toUpperCase()}-`) || 
-             cleanAlphaNumeric.startsWith(t.code.replace(/[^A-Z0-9]/g, '')) ||
-             cleanToken.includes(t.code.toUpperCase())
-      ) || DEFAULT_TENANTS.find(
-        t => cleanToken.startsWith(`${t.code.toUpperCase()}-`) || 
-             cleanAlphaNumeric.startsWith(t.code.replace(/[^A-Z0-9]/g, '')) ||
-             cleanToken.includes(t.code.toUpperCase())
-      );
-
-      if (matchingTenant) {
-        matchingKey = {
-          id: `key-auto-${Date.now()}`,
-          tenantId: matchingTenant.id,
-          token: cleanToken,
-          label: `${matchingTenant.name} Access Key`,
-          role: cleanToken.includes('ADMIN') ? 'company_admin' : 'staff',
-          active: true,
-          createdAt: Date.now(),
-          createdBy: 'System Resolver',
-          usedCount: 0
-        };
+      const penalty = recordFailedAttempt();
+      if (penalty.isLocked) {
+        logActivity({
+          action: 'SECURITY_ALERT',
+          details: `Anti-Brute-Force Lockout triggered after repeated invalid token attempts (${cleanToken.slice(0, 6)}***)`,
+          tenantId: activeTenant?.id || 'platform'
+        });
+        showNotification('error', `Account locked for 2 minutes due to repeated invalid token attempts.`);
+      } else if (penalty.warning) {
+        showNotification('error', penalty.warning);
       }
+      return false;
     }
 
-    // 4. Universal custom/regenerated token fallback
-    if (!matchingKey && cleanToken.length >= 3) {
-      const targetTenant = activeTenant || tenants[0] || DEFAULT_TENANTS[0];
-      matchingKey = {
-        id: `key-booking-auto-${Date.now()}`,
-        tenantId: targetTenant ? targetTenant.id : 'tenant-acme',
-        token: cleanToken,
-        label: `Booking Access Key (${cleanToken})`,
-        role: cleanToken.includes('ADMIN') ? 'company_admin' : 'staff',
-        active: true,
-        createdAt: Date.now(),
-        createdBy: 'Booking Resolver',
-        usedCount: 0
-      };
+    // Strict tenant isolation check: if current workspace is set, key must belong to this tenant or be ALL
+    if (activeTenant && matchingKey.tenantId !== 'ALL' && matchingKey.tenantId !== activeTenant.id) {
+      recordFailedAttempt();
+      return false;
     }
-
-    if (!matchingKey) return false;
 
     // Check expiration
     if (matchingKey.expiresAt && matchingKey.expiresAt < today) {
@@ -1076,6 +1085,9 @@ export default function App() {
 
     // Check max uses
     if (matchingKey.maxUses && matchingKey.usedCount >= matchingKey.maxUses) return false;
+
+    // Reset rate limiter on valid entry
+    resetRateLimit();
 
     // Increment used count
     const updatedKey: AccessKey = { ...matchingKey, usedCount: matchingKey.usedCount + 1 };
@@ -1670,9 +1682,8 @@ export default function App() {
   // Access Key Token Generator Handlers
   const handleGenerateAccessKey = async (data: { label: string; expiresAt?: string; maxUses?: number }): Promise<AccessKey> => {
     const id = `key-${Date.now()}`;
-    const randomHex = Math.random().toString(36).substring(2, 6).toUpperCase();
-    const randomNum = Math.floor(1000 + Math.random() * 9000);
-    const token = `SEC-${randomHex}-${randomNum}`;
+    const prefix = activeTenant ? activeTenant.code.toUpperCase() : 'SEC';
+    const token = generateSecureToken(prefix, 'KEY');
 
     const newKey: AccessKey = {
       id,
@@ -1687,7 +1698,13 @@ export default function App() {
       createdBy: user?.email || ADMIN_EMAIL,
     };
 
-    setAccessKeys(prev => [newKey, ...prev]);
+    setAccessKeys(prev => {
+      const updated = [newKey, ...prev];
+      try {
+        localStorage.setItem('office_sync_access_keys', JSON.stringify(updated));
+      } catch {}
+      return updated;
+    });
     try {
       if (db) {
         setDoc(doc(db, 'access_keys', id), newKey).catch(() => {});
@@ -1708,7 +1725,13 @@ export default function App() {
     if (!target) return;
 
     const updated = { ...target, active: !target.active };
-    setAccessKeys(prev => prev.map(k => k.id === keyId ? updated : k));
+    setAccessKeys(prev => {
+      const list = prev.map(k => k.id === keyId ? updated : k);
+      try {
+        localStorage.setItem('office_sync_access_keys', JSON.stringify(list));
+      } catch {}
+      return list;
+    });
 
     try {
       if (db) {
@@ -1719,12 +1742,19 @@ export default function App() {
     logActivity({
       action: updated.active ? 'ACCESS_KEY_GENERATED' : 'ACCESS_KEY_REVOKED',
       details: `${updated.active ? 'Re-activated' : 'Suspended'} Secret Token "${target.label}" (${target.token})`,
+      tenantId: target.tenantId
     });
   };
 
   const handleRevokeAccessKey = async (keyId: string) => {
     const target = accessKeys.find(k => k.id === keyId);
-    setAccessKeys(prev => prev.filter(k => k.id !== keyId));
+    setAccessKeys(prev => {
+      const list = prev.filter(k => k.id !== keyId);
+      try {
+        localStorage.setItem('office_sync_access_keys', JSON.stringify(list));
+      } catch {}
+      return list;
+    });
 
     try {
       if (db) {
@@ -1736,6 +1766,7 @@ export default function App() {
       logActivity({
         action: 'ACCESS_KEY_REVOKED',
         details: `Deleted Secret Token "${target.label}" (${target.token})`,
+        tenantId: target.tenantId
       });
     }
 
@@ -1760,16 +1791,10 @@ export default function App() {
     const prefix = tenant ? tenant.code : 'SEC';
     const role = options?.role || target.role || 'staff';
     const roleSlug = role === 'company_admin' ? 'ADMIN' : role === 'guest' ? 'GUEST' : 'STAFF';
-    const randomSuffix = Math.floor(1000 + Math.random() * 9000);
-    const randomHex = Math.random().toString(36).substring(2, 6).toUpperCase();
 
     let newToken = options?.customToken?.trim().toUpperCase();
     if (!newToken) {
-      if (target.tenantId && target.tenantId !== 'ALL') {
-        newToken = `${prefix}-${roleSlug}-${randomSuffix}`;
-      } else {
-        newToken = `SEC-${randomHex}-${randomSuffix}`;
-      }
+      newToken = generateSecureToken(prefix, roleSlug);
     }
 
     const today = new Date().toISOString().split('T')[0];
@@ -1905,32 +1930,106 @@ export default function App() {
   };
 
   // -------------------------------------------------------------
+  // Holiday & Replacement Leave Management (.ics)
+  // -------------------------------------------------------------
+  const handleSaveBlockedDate = async (dateData: BlockedDate) => {
+    setBlockedDates(prev => {
+      const exists = prev.some(b => b.id === dateData.id);
+      if (exists) {
+        return prev.map(b => b.id === dateData.id ? dateData : b);
+      }
+      return [dateData, ...prev];
+    });
+
+    logActivity({
+      action: 'HOLIDAY_CREATED',
+      actorEmail: user?.email || ADMIN_EMAIL,
+      actorName: user?.displayName || 'Administrator',
+      details: `Configured holiday/leave: ${dateData.title} on ${dateData.date} (${dateData.type === 'public_holiday' ? 'Public Holiday' : 'Replacement Leave'})`,
+      tenantId: dateData.tenantId === 'ALL' ? undefined : dateData.tenantId
+    });
+
+    showNotification('success', `Saved holiday/leave: ${dateData.title}`);
+  };
+
+  const handleDeleteBlockedDate = async (id: string) => {
+    const target = blockedDates.find(b => b.id === id);
+    setBlockedDates(prev => prev.filter(b => b.id !== id));
+    if (target) {
+      logActivity({
+        action: 'HOLIDAY_DELETED',
+        actorEmail: user?.email || ADMIN_EMAIL,
+        actorName: user?.displayName || 'Administrator',
+        details: `Deleted holiday/leave: ${target.title} (${target.date})`,
+        tenantId: target.tenantId === 'ALL' ? undefined : target.tenantId
+      });
+    }
+    showNotification('info', 'Holiday/leave date removed.');
+  };
+
+  const handleToggleBlockedDate = async (id: string) => {
+    setBlockedDates(prev => prev.map(b => b.id === id ? { ...b, active: !b.active } : b));
+  };
+
+  const handleImportIcsHolidays = async (importedDates: BlockedDate[], logDetails: string) => {
+    if (importedDates.length === 0) return;
+    setBlockedDates(prev => {
+      const map = new Map<string, BlockedDate>();
+      prev.forEach(d => map.set(d.id, d));
+      importedDates.forEach(d => map.set(d.id, d));
+      return Array.from(map.values());
+    });
+
+    logActivity({
+      action: 'HOLIDAY_IMPORTED',
+      actorEmail: user?.email || ADMIN_EMAIL,
+      actorName: user?.displayName || 'Administrator',
+      details: logDetails || `Imported ${importedDates.length} holiday/leave dates via .ics iCalendar file.`,
+      tenantId: activeTenant?.id
+    });
+
+    showNotification('success', `Imported ${importedDates.length} holiday/leave dates from .ics file.`);
+  };
+
+  const handleLoadPresetHolidays = async () => {
+    setBlockedDates(DEFAULT_SEED_BLOCKED_DATES);
+    logActivity({
+      action: 'HOLIDAY_UPDATED',
+      actorEmail: user?.email || ADMIN_EMAIL,
+      actorName: user?.displayName || 'Administrator',
+      details: 'Restored 2026 Gazetted Public Holidays and Corporate Replacement Leaves presets.',
+      tenantId: activeTenant?.id
+    });
+    showNotification('success', 'Restored 2026 default holidays preset.');
+  };
+
+  // -------------------------------------------------------------
   // Filtering Algorithm (Current Tenant & Office context)
   // -------------------------------------------------------------
   const currentTenantOffices = offices.filter(o => 
-    !activeTenant || !o.tenantId || o.tenantId === activeTenant.id
+    !activeTenant ? true : o.tenantId === activeTenant.id
   );
 
   const currentOfficeRooms = rooms.filter(r => 
-    (!activeTenant || !r.tenantId || r.tenantId === activeTenant.id) &&
+    (!activeTenant ? true : r.tenantId === activeTenant.id) &&
     (!activeOffice || r.officeId === activeOffice.id)
   );
 
   const currentOfficeBookings = bookings.filter(b => 
-    (!activeTenant || !b.tenantId || b.tenantId === activeTenant.id) &&
+    (!activeTenant ? true : b.tenantId === activeTenant.id) &&
     (!activeOffice || b.officeId === activeOffice.id)
   );
 
   const currentTenantAccessKeys = accessKeys.filter(k => 
-    !activeTenant || k.tenantId === 'ALL' || !k.tenantId || k.tenantId === activeTenant.id
+    !activeTenant ? true : (k.tenantId === activeTenant.id || (isMasterAdmin && k.tenantId === 'ALL'))
   );
 
   const currentTenantApprovedUsers = approvedUsers.filter(u => 
-    !activeTenant || !u.tenantId || u.tenantId === activeTenant.id
+    !activeTenant ? true : u.tenantId === activeTenant.id
   );
 
   const currentTenantAuditLogs = auditLogs.filter(l => 
-    !activeTenant || !l.tenantId || l.tenantId === 'platform' || l.tenantId === activeTenant.id
+    !activeTenant ? true : (l.tenantId === activeTenant.id || l.tenantId === 'platform')
   );
 
   const allUniqueAmenities = Array.from(
@@ -2100,6 +2199,7 @@ export default function App() {
             tenants={tenants}
             currentTenant={activeTenant}
             isMasterAdmin={isMasterAdmin}
+            blockedDates={blockedDates}
             onSaveTenant={handleSaveTenant}
             onDeleteTenant={handleDeleteTenant}
             onGenerateTenantToken={handleGenerateTenantToken}
@@ -2118,6 +2218,11 @@ export default function App() {
             onRevokeAccessKey={handleRevokeAccessKey}
             onRegenerateAccessKey={handleRegenerateAccessKey}
             onRegenerateAllInvalidKeys={handleRegenerateAllInvalidKeys}
+            onSaveBlockedDate={handleSaveBlockedDate}
+            onDeleteBlockedDate={handleDeleteBlockedDate}
+            onToggleBlockedDate={handleToggleBlockedDate}
+            onImportIcsHolidays={handleImportIcsHolidays}
+            onLoadPresetHolidays={handleLoadPresetHolidays}
             onClearAuditLogs={handleClearAuditLogs}
             onExitAdmin={handleExitAdminMode}
           />
@@ -2447,10 +2552,13 @@ export default function App() {
                     rooms={filteredRooms}
                     bookings={currentOfficeBookings.filter(b => b.date === selectedDate)}
                     selectedDate={selectedDate}
+                    onSelectDate={setSelectedDate}
                     onCellClick={handleTimelineCellClick}
                     onBookingClick={handleBookingPillClick}
                     currentUserUid={user?.uid}
                     onCancelBooking={handleCancelBooking}
+                    blockedDates={blockedDates}
+                    currentTenant={activeTenant}
                   />
                 )}
 
@@ -2469,6 +2577,8 @@ export default function App() {
                       setSelectedDate(date);
                       setViewMode('day');
                     }}
+                    blockedDates={blockedDates}
+                    currentTenant={activeTenant}
                   />
                 )}
 
@@ -2487,6 +2597,8 @@ export default function App() {
                       setSelectedDate(date);
                       setViewMode('day');
                     }}
+                    blockedDates={blockedDates}
+                    currentTenant={activeTenant}
                   />
                 )}
 
@@ -2539,6 +2651,8 @@ export default function App() {
         bookings={currentOfficeBookings}
         googleSyncAvailable={!!googleToken}
         adminEmail={ADMIN_EMAIL}
+        blockedDates={blockedDates}
+        currentTenant={activeTenant}
       />
 
       {/* Smart Room Finder Modal (Recommend earliest available date or instant check for defined date) */}

@@ -31,6 +31,7 @@ import {
   AlertCircle
 } from 'lucide-react';
 import { Tenant, AccessKey, Office, Room, Booking, TenantPlan, SubscriptionStatus } from '../types';
+import { generateSecureToken, evaluateTokenStrength } from '../utils/security';
 
 interface AdminTenantsTabProps {
   tenants: Tenant[];
@@ -303,7 +304,7 @@ export const AdminTenantsTab: React.FC<AdminTenantsTabProps> = ({
     };
 
     let extraConfig: any = undefined;
-    const generatedAdminToken = `${finalCode}-ADMIN-${Math.floor(1000 + Math.random() * 9000)}`;
+    const generatedAdminToken = generateSecureToken(finalCode, 'ADMIN');
 
     if (!editingTenant) {
       const parsedFloors = createInitialOffice && initialOfficeName.trim()

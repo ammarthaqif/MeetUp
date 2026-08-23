@@ -5,11 +5,13 @@ import {
   ShieldCheck, History, Download, FileSpreadsheet, FileText,
   Briefcase, Upload, Calendar
 } from 'lucide-react';
-import { Office, Room, Booking, ApprovedUser, AccessKey, AuditLog, Tenant } from '../types';
+import { Office, Room, Booking, ApprovedUser, AccessKey, AuditLog, Tenant, BlockedDate } from '../types';
 import { AdminAccessControl } from './AdminAccessControl';
 import { AdminAuditLogs } from './AdminAuditLogs';
 import { AdminTenantsTab } from './AdminTenantsTab';
 import { AdminExcelImportModal } from './AdminExcelImportModal';
+import { AdminHolidaysTab } from './AdminHolidaysTab';
+import { AdminIcsHolidayImportModal } from './AdminIcsHolidayImportModal';
 import { timeToMinutes } from '../utils';
 
 interface AdminPanelProps {
@@ -23,6 +25,7 @@ interface AdminPanelProps {
   auditLogs: AuditLog[];
   adminEmail: string;
   isMasterAdmin?: boolean;
+  blockedDates?: BlockedDate[];
   onSaveTenant?: (
     tenantData: Tenant,
     extraConfig?: {
@@ -48,6 +51,11 @@ interface AdminPanelProps {
   onRevokeAccessKey: (keyId: string) => Promise<void>;
   onRegenerateAccessKey?: (keyId: string, options?: { newLabel?: string; newExpiresAt?: string; resetUses?: boolean; customToken?: string; role?: any }) => Promise<AccessKey>;
   onRegenerateAllInvalidKeys?: () => Promise<number>;
+  onSaveBlockedDate?: (dateData: BlockedDate) => Promise<void>;
+  onDeleteBlockedDate?: (id: string) => Promise<void>;
+  onToggleBlockedDate?: (id: string) => Promise<void>;
+  onImportIcsHolidays?: (dates: BlockedDate[], details: string) => Promise<void>;
+  onLoadPresetHolidays?: () => Promise<void>;
   onClearAuditLogs: () => Promise<void>;
   onExitAdmin: () => void;
 }
@@ -63,6 +71,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
   auditLogs,
   adminEmail,
   isMasterAdmin = false,
+  blockedDates = [],
   onSaveTenant,
   onDeleteTenant,
   onGenerateTenantToken,
@@ -81,15 +90,21 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
   onRevokeAccessKey,
   onRegenerateAccessKey,
   onRegenerateAllInvalidKeys,
+  onSaveBlockedDate,
+  onDeleteBlockedDate,
+  onToggleBlockedDate,
+  onImportIcsHolidays,
+  onLoadPresetHolidays,
   onClearAuditLogs,
   onExitAdmin,
 }) => {
-  const [activeTab, setActiveTab] = useState<'tenants' | 'offices' | 'rooms' | 'bookings' | 'access' | 'audit'>(
+  const [activeTab, setActiveTab] = useState<'tenants' | 'offices' | 'rooms' | 'bookings' | 'holidays' | 'access' | 'audit'>(
     isMasterAdmin ? 'tenants' : 'offices'
   );
   const [errorMessage, setErrorMessage] = useState('');
   const [successMessage, setSuccessMessage] = useState('');
   const [isExcelImportOpen, setIsExcelImportOpen] = useState(false);
+  const [isIcsHolidayImportOpen, setIsIcsHolidayImportOpen] = useState(false);
 
 
   // Office form states
@@ -427,6 +442,17 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
             }`}
           >
             📅 Master Reservations
+          </button>
+          <button
+            onClick={() => setActiveTab('holidays')}
+            className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-all cursor-pointer flex items-center gap-1.5 ${
+              activeTab === 'holidays' ? 'bg-indigo-600 text-white shadow-md' : 'bg-slate-800 text-slate-300 hover:bg-slate-750'
+            }`}
+          >
+            <span>🌴 Holidays & Leaves (.ics)</span>
+            <span className="text-[10px] bg-slate-900/80 px-1.5 py-0.2 rounded font-mono text-emerald-300 font-bold">
+              {blockedDates.filter(b => b.active && (isMasterAdmin || b.tenantId === 'ALL' || b.tenantId === currentTenant?.id)).length}
+            </span>
           </button>
           <button
             onClick={() => setActiveTab('access')}
@@ -1010,6 +1036,43 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
         </div>
       )}
 
+      {/* --- TAB 3.5: PUBLIC HOLIDAYS & REPLACEMENT LEAVES (.ICS) --- */}
+      {activeTab === 'holidays' && (
+        <div className="bg-slate-850 p-6 rounded-2xl border border-slate-800">
+          <AdminHolidaysTab
+            blockedDates={blockedDates}
+            tenants={tenants}
+            currentTenant={currentTenant}
+            isMasterAdmin={isMasterAdmin}
+            adminEmail={adminEmail}
+            onOpenIcsImportModal={() => setIsIcsHolidayImportOpen(true)}
+            onSaveBlockedDate={async (dateData) => {
+              if (onSaveBlockedDate) {
+                await onSaveBlockedDate(dateData);
+                triggerNotification('success', `Saved holiday/leave "${dateData.title}".`);
+              }
+            }}
+            onDeleteBlockedDate={async (id) => {
+              if (onDeleteBlockedDate) {
+                await onDeleteBlockedDate(id);
+                triggerNotification('success', 'Removed holiday/leave date.');
+              }
+            }}
+            onToggleBlockedDate={async (id) => {
+              if (onToggleBlockedDate) {
+                await onToggleBlockedDate(id);
+              }
+            }}
+            onLoadPresetHolidays={async () => {
+              if (onLoadPresetHolidays) {
+                await onLoadPresetHolidays();
+                triggerNotification('success', 'Restored 2026 Gazetted Holidays preset.');
+              }
+            }}
+          />
+        </div>
+      )}
+
       {/* --- TAB 4: ACCESS CONTROL & TOKENS --- */}
       {activeTab === 'access' && (
         <div className="bg-slate-850 p-6 rounded-2xl border border-slate-800">
@@ -1055,6 +1118,22 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
             await onImportBookings(importedBookings, logDetails);
           }
           triggerNotification('success', `Successfully imported ${importedBookings.length} reservations from Excel.`);
+        }}
+      />
+
+      {/* --- ICS HOLIDAY & LEAVE IMPORT MODAL --- */}
+      <AdminIcsHolidayImportModal
+        isOpen={isIcsHolidayImportOpen}
+        onClose={() => setIsIcsHolidayImportOpen(false)}
+        tenants={tenants}
+        currentTenant={currentTenant}
+        isMasterAdmin={isMasterAdmin}
+        adminEmail={adminEmail}
+        onImportBlockedDates={async (importedDates, logDetails) => {
+          if (onImportIcsHolidays) {
+            await onImportIcsHolidays(importedDates, logDetails);
+          }
+          triggerNotification('success', `Successfully imported ${importedDates.length} holiday/leave dates from .ics calendar.`);
         }}
       />
 

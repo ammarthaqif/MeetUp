@@ -1,6 +1,6 @@
 import React from 'react';
-import { Clock, Plus, Users, ShieldAlert, Monitor, Video, Pencil, Trash, ChevronLeft, ChevronRight } from 'lucide-react';
-import { Room, Booking } from '../types';
+import { Clock, Plus, Users, ShieldAlert, Monitor, Video, Pencil, Trash, ChevronLeft, ChevronRight, Sparkles, AlertCircle } from 'lucide-react';
+import { Room, Booking, BlockedDate, Tenant } from '../types';
 import { timeToMinutes, getBookingStatus, addDaysToDate, formatDateToISO, formatFriendlyDate } from '../utils';
 
 interface BookingTimelineProps {
@@ -12,6 +12,8 @@ interface BookingTimelineProps {
   onBookingClick: (booking: Booking) => void;
   currentUserUid?: string;
   onCancelBooking?: (bookingId: string) => void;
+  blockedDates?: BlockedDate[];
+  currentTenant?: Tenant | null;
 }
 
 export const BookingTimeline: React.FC<BookingTimelineProps> = ({
@@ -23,6 +25,8 @@ export const BookingTimeline: React.FC<BookingTimelineProps> = ({
   onBookingClick,
   currentUserUid,
   onCancelBooking,
+  blockedDates = [],
+  currentTenant = null,
 }) => {
   const startHour = 8; // 08:00 AM
   const endHour = 19;  // 07:00 PM
@@ -41,6 +45,16 @@ export const BookingTimeline: React.FC<BookingTimelineProps> = ({
   const handleToday = () => {
     if (onSelectDate) onSelectDate(formatDateToISO(new Date()));
   };
+
+  // Find matching holiday / replacement leave for the selected date
+  const activeHoliday = blockedDates.find(b => {
+    if (!b.active) return false;
+    const matchesTenant = b.tenantId === 'ALL' || b.tenantId === currentTenant?.id;
+    if (!matchesTenant) return false;
+    if (b.date === selectedDate) return true;
+    if (b.endDate && selectedDate >= b.date && selectedDate <= b.endDate) return true;
+    return false;
+  });
 
   // Generate hourly labels for header
   const hoursArray = Array.from({ length: totalHours }, (_, i) => {
@@ -64,8 +78,48 @@ export const BookingTimeline: React.FC<BookingTimelineProps> = ({
   const currentTimeLinePercent = showCurrentTimeLine ? ((currentMin - startMinutes) / totalMinutes) * 100 : null;
 
   return (
-    <div id="booking-timeline-card" className="bg-white border border-slate-200 rounded-lg p-4 shadow-sm overflow-hidden">
+    <div id="booking-timeline-card" className="bg-white border border-slate-200 rounded-lg p-4 shadow-sm overflow-hidden space-y-3">
       
+      {/* Holiday / Replacement Leave Notification Ribbon */}
+      {activeHoliday && (
+        <div className={`p-3 rounded-xl border flex items-center justify-between gap-3 text-xs animate-in fade-in duration-150 ${
+          activeHoliday.type === 'public_holiday' 
+            ? 'bg-emerald-50/90 border-emerald-200 text-emerald-950' 
+            : activeHoliday.type === 'replacement_leave'
+            ? 'bg-violet-50/90 border-violet-200 text-violet-950'
+            : 'bg-amber-50/90 border-amber-200 text-amber-950'
+        }`}>
+          <div className="flex items-center gap-2.5">
+            <span className="text-xl shrink-0">
+              {activeHoliday.type === 'public_holiday' ? '🌴' : activeHoliday.type === 'replacement_leave' ? '🏖️' : '🏢'}
+            </span>
+            <div>
+              <div className="flex items-center gap-2">
+                <span className="font-extrabold uppercase font-sans tracking-tight">
+                  {activeHoliday.type === 'public_holiday' ? 'Public Holiday Notice' : activeHoliday.type === 'replacement_leave' ? 'Company Replacement Leave' : 'Company Closure Notice'}
+                </span>
+                <span className={`text-[10px] font-mono px-2 py-0.5 rounded font-bold uppercase ${
+                  activeHoliday.type === 'public_holiday' ? 'bg-emerald-200 text-emerald-900' : 'bg-violet-200 text-violet-900'
+                }`}>
+                  {activeHoliday.tenantId === 'ALL' ? 'Gazetted' : currentTenant?.name || 'Company Specific'}
+                </span>
+                {activeHoliday.isHardBlock && (
+                  <span className="text-[10px] bg-rose-100 text-rose-800 border border-rose-200 px-1.5 py-0.5 rounded font-bold">
+                    Strict Lockout
+                  </span>
+                )}
+              </div>
+              <p className="text-[11px] opacity-90 mt-0.5">
+                <strong className="font-bold">{activeHoliday.title}</strong> — {activeHoliday.description || 'Marked as company block date.'}
+              </p>
+            </div>
+          </div>
+          <div className="text-[10px] font-mono font-bold opacity-75 shrink-0">
+            {formatFriendlyDate(selectedDate)}
+          </div>
+        </div>
+      )}
+
       {/* Header */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 mb-4">
         <div className="flex items-center gap-2 flex-wrap">

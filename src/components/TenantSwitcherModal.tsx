@@ -14,6 +14,12 @@ import {
 } from 'lucide-react';
 import { Tenant, AccessKey } from '../types';
 import { DEFAULT_TENANTS, DEFAULT_TENANT_ACCESS_KEYS } from '../data/defaultTenants';
+import { 
+  timingSafeEqual, 
+  getRateLimitStatus, 
+  recordFailedAttempt, 
+  resetRateLimit 
+} from '../utils/security';
 
 interface TenantSwitcherModalProps {
   isOpen: boolean;
@@ -51,6 +57,12 @@ export const TenantSwitcherModal: React.FC<TenantSwitcherModalProps> = ({
 
     if (!rawInput) return;
 
+    const rateStatus = getRateLimitStatus();
+    if (rateStatus.isLocked) {
+      setErrorMsg(`Anti-Brute-Force Lockout active. Try again in ${rateStatus.remainingLockoutSeconds}s.`);
+      return;
+    }
+
     if (rawInput.toUpperCase() === 'MASTER-PLATFORM-ADMIN-2026') {
       const defaultTenant = tenants[0] || DEFAULT_TENANTS[0];
       if (defaultTenant) onSwitchTenant(defaultTenant, rawInput.toUpperCase());
@@ -78,76 +90,38 @@ export const TenantSwitcherModal: React.FC<TenantSwitcherModalProps> = ({
       }
     } catch {}
 
-    // 1. Exact match in live access keys
-    let matchedKey = liveKeys.find(k => k.token.trim().toLowerCase() === rawNormalized);
+    // 1. Timing-safe exact match in live access keys
+    let matchedKey = liveKeys.find(k => timingSafeEqual(k.token, rawInput));
 
-    // 2. Alphanumeric match (ignoring dashes and whitespace)
+    // 2. Timing-safe alphanumeric match (ignoring dashes and whitespace)
     if (!matchedKey) {
       matchedKey = liveKeys.find(
-        k => k.token.replace(/[^a-zA-Z0-9]/g, '').toLowerCase() === rawAlphaNumeric
+        k => timingSafeEqual(k.token.replace(/[^a-zA-Z0-9]/g, ''), rawAlphaNumeric)
       );
     }
 
     // 3. Fallback search in default access keys
     if (!matchedKey) {
       matchedKey = DEFAULT_TENANT_ACCESS_KEYS.find(
-        k => k.token.trim().toLowerCase() === rawNormalized ||
-             k.token.replace(/[^a-zA-Z0-9]/g, '').toLowerCase() === rawAlphaNumeric
+        k => timingSafeEqual(k.token, rawInput) ||
+             timingSafeEqual(k.token.replace(/[^a-zA-Z0-9]/g, ''), rawAlphaNumeric)
       );
     }
 
-    // 4. Match tenant code, name, or passkey
     if (!matchedKey) {
-      const matchingTenant = tenants.find(t => 
-        rawNormalized === t.code.toLowerCase() ||
-        rawNormalized === t.name.toLowerCase() ||
-        rawNormalized.startsWith(`${t.code.toLowerCase()}-`) ||
-        rawAlphaNumeric.startsWith(t.code.replace(/[^a-zA-Z0-9]/g, '').toLowerCase()) ||
-        rawNormalized.includes(t.code.toLowerCase())
-      ) || DEFAULT_TENANTS.find(t => 
-        rawNormalized === t.code.toLowerCase() ||
-        rawNormalized === t.name.toLowerCase() ||
-        rawNormalized.startsWith(`${t.code.toLowerCase()}-`) ||
-        rawAlphaNumeric.startsWith(t.code.replace(/[^a-zA-Z0-9]/g, '').toLowerCase()) ||
-        rawNormalized.includes(t.code.toLowerCase())
-      );
-
-      if (matchingTenant) {
-        matchedKey = {
-          id: `key-auto-${Date.now()}`,
-          tenantId: matchingTenant.id,
-          token: rawInput.toUpperCase(),
-          label: `${matchingTenant.name} Access Key`,
-          role: rawInput.toUpperCase().includes('ADMIN') ? 'company_admin' : 'staff',
-          active: true,
-          createdAt: Date.now(),
-          createdBy: 'System Switcher Resolver',
-          usedCount: 0
-        };
+      const penalty = recordFailedAttempt();
+      if (penalty.isLocked) {
+        setErrorMsg(`Security Lockout: Too many invalid attempts. Try again in ${penalty.remainingLockoutSeconds}s.`);
+      } else if (penalty.warning) {
+        setErrorMsg(penalty.warning);
+      } else {
+        setErrorMsg('Invalid company access token. Please verify with your workspace administrator.');
       }
-    }
-
-    // 5. Ultimate fallback for custom or regenerated keys
-    if (!matchedKey && rawInput.length >= 3) {
-      const defaultTenant = currentTenant || tenants[0] || DEFAULT_TENANTS[0];
-      const isAdmin = rawInput.toUpperCase().includes('ADMIN');
-      matchedKey = {
-        id: `key-fallback-${Date.now()}`,
-        tenantId: defaultTenant ? defaultTenant.id : 'tenant-acme',
-        token: rawInput.toUpperCase(),
-        label: `Workspace Access Key (${rawInput.toUpperCase()})`,
-        role: isAdmin ? 'company_admin' : 'staff',
-        active: true,
-        createdAt: Date.now(),
-        createdBy: 'Fallback Token Resolver',
-        usedCount: 0
-      };
-    }
-
-    if (!matchedKey) {
-      setErrorMsg('Invalid company access token. Please verify with your workspace administrator.');
       return;
     }
+
+    // Valid token
+    resetRateLimit();
 
     if (!matchedKey.active) {
       setErrorMsg('This company access token has been deactivated.');
@@ -168,11 +142,8 @@ export const TenantSwitcherModal: React.FC<TenantSwitcherModalProps> = ({
       tenants.find(t => t.id === matchedKey!.tenantId && t.active) ||
       tenants.find(t => t.id === matchedKey!.tenantId) ||
       DEFAULT_TENANTS.find(t => t.id === matchedKey!.tenantId) ||
-      tenants.find(t => t.code.toLowerCase() === matchedKey!.token.split('-')[0]?.toLowerCase()) ||
-      DEFAULT_TENANTS.find(t => t.code.toLowerCase() === matchedKey!.token.split('-')[0]?.toLowerCase()) ||
-      currentTenant ||
-      tenants[0] ||
-      DEFAULT_TENANTS[0];
+      tenants.find(t => t.code.toUpperCase() === matchedKey!.token.split('-')[0]?.toUpperCase()) ||
+      DEFAULT_TENANTS.find(t => t.code.toUpperCase() === matchedKey!.token.split('-')[0]?.toUpperCase());
 
     if (!targetTenant) {
       setErrorMsg('Tenant organization not found or disabled.');
