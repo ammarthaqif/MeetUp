@@ -31,7 +31,7 @@ import {
   AlertCircle
 } from 'lucide-react';
 import { Tenant, AccessKey, Office, Room, Booking, TenantPlan, SubscriptionStatus } from '../types';
-import { generateSecureToken, evaluateTokenStrength } from '../utils/security';
+import { generateSecureToken, evaluateTokenStrength, getKeyStatus, isTokenExpired, isTokenExhausted } from '../utils/security';
 
 interface AdminTenantsTabProps {
   tenants: Tenant[];
@@ -1158,10 +1158,8 @@ For support, contact Master Platform Administration via the Enterprise Support P
                   )}
 
                   {tenantTokens.map(k => {
-                    const isInactive = !k.active;
-                    const isExpired = k.expiresAt && k.expiresAt < todayStr;
-                    const isExhausted = k.maxUses && k.usedCount >= k.maxUses;
-                    const isInvalid = isInactive || isExpired || isExhausted;
+                    const statusInfo = getKeyStatus(k);
+                    const isInvalid = statusInfo.isInvalid;
                     const isRegenerating = regeneratingKeyId === k.id;
 
                     return (
@@ -1182,7 +1180,7 @@ For support, contact Master Platform Administration via the Enterprise Support P
                               </span>
                               {isInvalid && (
                                 <span className="text-[9px] px-1.5 py-0.2 rounded bg-amber-500/20 text-amber-300 border border-amber-500/30 font-bold uppercase">
-                                  {isInactive ? 'Inactive' : isExpired ? 'Expired' : 'Max Uses'}
+                                  {statusInfo.label}
                                 </span>
                               )}
                             </div>

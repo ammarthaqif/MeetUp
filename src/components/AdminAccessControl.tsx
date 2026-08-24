@@ -4,8 +4,8 @@ import {
   Plus, Search, AlertCircle, RefreshCw, UploadCloud, Lock, CheckCircle2,
   Shield, UserCheck, X, Building2, Crown
 } from 'lucide-react';
-import { ApprovedUser, AccessKey, Tenant } from '../types';
-import { evaluateTokenStrength } from '../utils/security';
+import { ApprovedUser, AccessKey, Tenant, TenantRole } from '../types';
+import { evaluateTokenStrength, getKeyStatus, isTokenExpired, isTokenExhausted } from '../utils/security';
 
 interface AdminAccessControlProps {
   approvedUsers: ApprovedUser[];
@@ -17,7 +17,7 @@ interface AdminAccessControlProps {
   onAddApprovedUser: (email: string, name?: string, department?: string) => Promise<void>;
   onBulkAddApprovedUsers: (emails: string[]) => Promise<number>;
   onRemoveApprovedUser: (userId: string) => Promise<void>;
-  onGenerateAccessKey: (data: { label: string; expiresAt?: string; maxUses?: number }) => Promise<AccessKey>;
+  onGenerateAccessKey: (data: { label: string; expiresAt?: string; maxUses?: number; role?: TenantRole; tenantId?: string }) => Promise<AccessKey>;
   onToggleAccessKey: (keyId: string) => Promise<void>;
   onRevokeAccessKey: (keyId: string) => Promise<void>;
   onRegenerateAccessKey?: (keyId: string, options?: { newLabel?: string; newExpiresAt?: string; resetUses?: boolean; customToken?: string; role?: any }) => Promise<AccessKey>;
@@ -60,6 +60,7 @@ export const AdminAccessControl: React.FC<AdminAccessControlProps> = ({
 
   // Key generator state
   const [keyLabel, setKeyLabel] = useState('');
+  const [keyRole, setKeyRole] = useState<TenantRole>('staff');
   const [keyExpiresAt, setKeyExpiresAt] = useState('');
   const [keyMaxUses, setKeyMaxUses] = useState<string>('');
   const [isGeneratingKey, setIsGeneratingKey] = useState(false);
@@ -185,12 +186,15 @@ export const AdminAccessControl: React.FC<AdminAccessControlProps> = ({
       const maxUses = keyMaxUses ? parseInt(keyMaxUses, 10) : undefined;
       const newKey = await onGenerateAccessKey({
         label: keyLabel.trim(),
+        role: keyRole,
         expiresAt: keyExpiresAt || undefined,
         maxUses: isNaN(maxUses as number) ? undefined : maxUses,
+        tenantId: currentTenant?.id
       });
       setKeyLabel('');
       setKeyExpiresAt('');
       setKeyMaxUses('');
+      setKeyRole('staff');
       showNotice('success', `Generated new secret key token: ${newKey.token}`);
     } catch {
       showNotice('error', 'Failed to generate token.');
@@ -212,21 +216,6 @@ export const AdminAccessControl: React.FC<AdminAccessControlProps> = ({
     (u.department && u.department.toLowerCase().includes(userSearch.toLowerCase()))
   );
 
-  const today = new Date().toISOString().split('T')[0];
-
-  const getKeyStatus = (key: AccessKey) => {
-    if (!key.active) {
-      return { status: 'revoked', label: 'Revoked / Inactive', isInvalid: true, color: 'rose' };
-    }
-    if (key.expiresAt && key.expiresAt < today) {
-      return { status: 'expired', label: `Expired (${key.expiresAt})`, isInvalid: true, color: 'amber' };
-    }
-    if (key.maxUses && key.usedCount >= key.maxUses) {
-      return { status: 'exhausted', label: `Limit Reached (${key.usedCount}/${key.maxUses})`, isInvalid: true, color: 'purple' };
-    }
-    return { status: 'active', label: 'Active', isInvalid: false, color: 'emerald' };
-  };
-
   const invalidKeys = accessKeys.filter(k => getKeyStatus(k).isInvalid);
 
   const filteredKeys = accessKeys.filter(k =>
@@ -238,7 +227,7 @@ export const AdminAccessControl: React.FC<AdminAccessControlProps> = ({
   const handleOpenRegenModal = (key: AccessKey) => {
     setRegenTargetKey(key);
     // If the key was expired, reset the date field to blank so the regenerated token is active without expiration
-    const isPast = key.expiresAt && key.expiresAt < today;
+    const isPast = isTokenExpired(key.expiresAt);
     setRegenExpiresAt(isPast ? '' : (key.expiresAt || ''));
     setRegenRole((key.role as any) || 'staff');
     setRegenResetUses(true);
@@ -656,6 +645,47 @@ export const AdminAccessControl: React.FC<AdminAccessControlProps> = ({
                     placeholder="e.g. Design Team Q3 or Vendor Pass"
                     className="w-full bg-white border border-slate-200 rounded-xl px-3 py-2 text-xs text-slate-800 focus:outline-none focus:ring-2 focus:ring-indigo-500 font-medium"
                   />
+                </div>
+
+                <div>
+                  <label className="block text-[10px] font-bold text-slate-500 uppercase tracking-wider mb-1 font-mono">
+                    Token Authority Role *
+                  </label>
+                  <div className="grid grid-cols-3 gap-1.5">
+                    <button
+                      type="button"
+                      onClick={() => setKeyRole('staff')}
+                      className={`px-2 py-1.5 rounded-xl border text-[11px] font-bold transition-all cursor-pointer text-center ${
+                        keyRole === 'staff'
+                          ? 'bg-indigo-600 text-white border-indigo-600 shadow-2xs'
+                          : 'bg-white text-slate-700 border-slate-200 hover:bg-slate-50'
+                      }`}
+                    >
+                      Staff Member
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setKeyRole('company_admin')}
+                      className={`px-2 py-1.5 rounded-xl border text-[11px] font-bold transition-all cursor-pointer text-center ${
+                        keyRole === 'company_admin'
+                          ? 'bg-purple-600 text-white border-purple-600 shadow-2xs'
+                          : 'bg-white text-slate-700 border-slate-200 hover:bg-slate-50'
+                      }`}
+                    >
+                      Company Admin
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setKeyRole('guest')}
+                      className={`px-2 py-1.5 rounded-xl border text-[11px] font-bold transition-all cursor-pointer text-center ${
+                        keyRole === 'guest'
+                          ? 'bg-amber-600 text-white border-amber-600 shadow-2xs'
+                          : 'bg-white text-slate-700 border-slate-200 hover:bg-slate-50'
+                      }`}
+                    >
+                      Guest Visitor
+                    </button>
+                  </div>
                 </div>
 
                 <div className="grid grid-cols-2 gap-2">

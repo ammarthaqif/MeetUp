@@ -24,10 +24,10 @@ const SECURE_ALPHABET = '23456789ABCDEFGHJKMNPQRSTUVWXYZ';
 export function cleanAndNormalizeToken(input: string): string {
   if (!input) return '';
   return input
-    .replace(/[\u200B-\u200D\uFEFF\u00A0\u200E\u200F]/g, '') // zero-width, non-breaking spaces
+    .replace(/[\u200B-\u200D\uFEFF\u00A0\u200E\u200F\u202A-\u202E]/g, '') // zero-width, bidirectional, non-breaking spaces
     .replace(/^["'“”‘’`]+|["'“”‘’`]+$/g, '') // surrounding quotes
     .replace(/^(BEARER|TOKEN|KEY|PASSKEY):\s*/i, '') // header prefixes if copied
-    .replace(/\s*[-_]\s*/g, '-') // spaces around separators e.g. "ACME - ADMIN" -> "ACME-ADMIN"
+    .replace(/\s*[-_:]\s*/g, '-') // spaces around separators e.g. "ACME - ADMIN" -> "ACME-ADMIN"
     .replace(/\s+/g, ' ') // collapse multiple spaces
     .trim()
     .toUpperCase();
@@ -35,6 +35,57 @@ export function cleanAndNormalizeToken(input: string): string {
 
 export function cleanAlphaNumericToken(input: string): string {
   return cleanAndNormalizeToken(input).replace(/[^A-Z0-9]/g, '');
+}
+
+/**
+ * Robust check if a token is expired.
+ * Compares strictly formatted YYYY-MM-DD strings against current local/UTC date.
+ */
+export function isTokenExpired(expiresAt?: string | null): boolean {
+  if (!expiresAt) return false;
+  const trimmed = String(expiresAt).trim();
+  if (!trimmed || trimmed === '' || trimmed === 'never' || trimmed === 'null' || trimmed === 'undefined') {
+    return false;
+  }
+  // If not in a comparable date format or has invalid chars, treat as unexpired unless it matches YYYY-MM-DD
+  if (!/^\d{4}-\d{2}-\d{2}/.test(trimmed)) {
+    return false;
+  }
+  const today = new Date().toISOString().split('T')[0];
+  return trimmed < today;
+}
+
+/**
+ * Check if a token has exceeded its maximum usage limit
+ */
+export function isTokenExhausted(key: { maxUses?: number; usedCount?: number }): boolean {
+  if (typeof key.maxUses !== 'number' || isNaN(key.maxUses) || key.maxUses <= 0) {
+    return false;
+  }
+  return (key.usedCount || 0) >= key.maxUses;
+}
+
+export interface KeyStatusSummary {
+  status: 'active' | 'revoked' | 'expired' | 'exhausted';
+  label: string;
+  isInvalid: boolean;
+  color: 'emerald' | 'rose' | 'amber' | 'purple';
+}
+
+/**
+ * Universal Access Key status evaluator
+ */
+export function getKeyStatus(key: AccessKey): KeyStatusSummary {
+  if (key.active === false) {
+    return { status: 'revoked', label: 'Revoked / Inactive', isInvalid: true, color: 'rose' };
+  }
+  if (isTokenExpired(key.expiresAt)) {
+    return { status: 'expired', label: `Expired (${key.expiresAt})`, isInvalid: true, color: 'amber' };
+  }
+  if (isTokenExhausted(key)) {
+    return { status: 'exhausted', label: `Limit Reached (${key.usedCount}/${key.maxUses})`, isInvalid: true, color: 'purple' };
+  }
+  return { status: 'active', label: 'Active', isInvalid: false, color: 'emerald' };
 }
 
 /**
@@ -100,15 +151,20 @@ export function healAndSanitizeAccessKeys(
             if (k && k.id && k.token) {
               const cleanToken = cleanAndNormalizeToken(k.token);
               const isDefault = DEFAULT_TENANT_ACCESS_KEYS.some(
-                dk => dk.id === k.id || cleanAndNormalizeToken(dk.token) === cleanToken
+                dk => dk.id === k.id || isTokenMatch(dk.token, cleanToken)
               );
+              
+              const cleanExp = (k.expiresAt && String(k.expiresAt).trim() !== '' && String(k.expiresAt).trim() !== 'never')
+                ? String(k.expiresAt).trim()
+                : undefined;
+
               keyMap.set(k.id, {
                 ...k,
                 token: cleanToken,
                 active: isDefault ? true : (k.active !== undefined ? k.active : true),
                 usedCount: (isDefault && k.maxUses && k.usedCount >= k.maxUses) ? 0 : (k.usedCount || 0),
-                maxUses: k.maxUses ? Math.max(k.maxUses, 500) : 99999,
-                expiresAt: isDefault ? undefined : k.expiresAt
+                maxUses: isDefault ? 99999 : (k.maxUses && k.maxUses > 0 ? k.maxUses : undefined),
+                expiresAt: isDefault ? undefined : cleanExp
               });
             }
           });
@@ -124,16 +180,20 @@ export function healAndSanitizeAccessKeys(
       
       const cleanToken = cleanAndNormalizeToken(k.token);
       const isDefault = DEFAULT_TENANT_ACCESS_KEYS.some(
-        dk => dk.id === k.id || cleanAndNormalizeToken(dk.token) === cleanToken
+        dk => dk.id === k.id || isTokenMatch(dk.token, cleanToken)
       );
       
+      const cleanExp = (k.expiresAt && String(k.expiresAt).trim() !== '' && String(k.expiresAt).trim() !== 'never')
+        ? String(k.expiresAt).trim()
+        : undefined;
+
       const repairedKey: AccessKey = {
         ...k,
         token: cleanToken,
         active: isDefault ? true : (k.active !== undefined ? k.active : true),
         usedCount: (isDefault && k.maxUses && k.usedCount >= k.maxUses) ? 0 : (k.usedCount || 0),
-        maxUses: k.maxUses ? Math.max(k.maxUses, 500) : 99999,
-        expiresAt: isDefault ? undefined : k.expiresAt
+        maxUses: isDefault ? 99999 : (k.maxUses && k.maxUses > 0 ? k.maxUses : undefined),
+        expiresAt: isDefault ? undefined : cleanExp
       };
       
       keyMap.set(k.id, repairedKey);
@@ -143,8 +203,8 @@ export function healAndSanitizeAccessKeys(
   // 4. Ensure every active tenant has valid admin & staff keys
   availableTenants.forEach(tenant => {
     const tenantKeys = Array.from(keyMap.values()).filter(k => k.tenantId === tenant.id);
-    const hasAdminKey = tenantKeys.some(k => k.active && k.role === 'company_admin');
-    const hasStaffKey = tenantKeys.some(k => k.active && (k.role === 'staff' || !k.role));
+    const hasAdminKey = tenantKeys.some(k => k.active && k.role === 'company_admin' && !isTokenExpired(k.expiresAt) && !isTokenExhausted(k));
+    const hasStaffKey = tenantKeys.some(k => k.active && (k.role === 'staff' || !k.role) && !isTokenExpired(k.expiresAt) && !isTokenExhausted(k));
 
     if (!hasAdminKey) {
       const newAdminId = `key-${tenant.code.toLowerCase()}-admin-auto`;
@@ -271,7 +331,7 @@ export function resolveAccessTokenOrPasskey(
 
     // Check expiration (only enforce if not a default/healed key)
     const isDefault = DEFAULT_TENANT_ACCESS_KEYS.some(dk => dk.id === matchedKey.id || isTokenMatch(dk.token, matchedKey.token));
-    if (!isDefault && matchedKey.expiresAt && matchedKey.expiresAt < today) {
+    if (!isDefault && isTokenExpired(matchedKey.expiresAt)) {
       return {
         valid: false,
         role: matchedKey.role || 'staff',
@@ -282,7 +342,7 @@ export function resolveAccessTokenOrPasskey(
     }
 
     // Check usage limits
-    if (!isDefault && matchedKey.maxUses && matchedKey.usedCount >= matchedKey.maxUses) {
+    if (!isDefault && isTokenExhausted(matchedKey)) {
       return {
         valid: false,
         role: matchedKey.role || 'staff',
@@ -303,40 +363,52 @@ export function resolveAccessTokenOrPasskey(
         key: activeKey,
         tenant: tenants[0] || DEFAULT_TENANTS[0],
         isSuperAdmin: true,
-        role: 'company_admin',
+        role: activeKey.role || 'company_admin',
         token: activeKey.token,
         source: 'universal_key'
       };
     }
 
+    // Robust tenant resolution
     const matchedTenant = tenants.find(t => t.id === matchedKey.tenantId) ||
-                          DEFAULT_TENANTS.find(t => t.id === matchedKey.tenantId);
+                          DEFAULT_TENANTS.find(t => t.id === matchedKey.tenantId) ||
+                          tenants.find(t => isTokenMatch(cleanInput, t.code) || cleanInput.startsWith(t.code.toUpperCase())) ||
+                          DEFAULT_TENANTS.find(t => isTokenMatch(cleanInput, t.code) || cleanInput.startsWith(t.code.toUpperCase()));
+
+    const determinedRole: TenantRole = activeKey.role || 
+      (activeKey.token.includes('ADMIN') || activeKey.token.includes('EXEC') ? 'company_admin' : 
+       activeKey.token.includes('GUEST') ? 'guest' : 'staff');
 
     return {
       valid: true,
       key: activeKey,
       tenant: matchedTenant || tenants[0] || DEFAULT_TENANTS[0],
       isSuperAdmin: false,
-      role: activeKey.role || (activeKey.token.includes('ADMIN') ? 'company_admin' : 'staff'),
+      role: determinedRole,
       token: activeKey.token,
       source: 'access_key'
     };
   }
 
   // 3. DYNAMIC TENANT PREFIX MATCHING (Supports newly generated tokens e.g. ACME-ADMIN-..., NEXUS-KEY-..., etc.)
-  const tokenPrefix = cleanInput.split(/[-_]/)[0] || '';
+  const tokenParts = cleanInput.split(/[-_\s]+/);
+  const tokenPrefix = tokenParts[0] || '';
   const alphaPrefix = cleanAlphaNumericToken(tokenPrefix);
   
   const matchedTenantByPrefix = tenants.find(t => 
     t.code.toUpperCase() === tokenPrefix ||
     cleanAlphaNumericToken(t.code) === alphaPrefix ||
     t.slug.toUpperCase() === tokenPrefix ||
-    cleanAlphaNumericToken(t.name) === alphaPrefix
+    cleanAlphaNumericToken(t.name) === alphaPrefix ||
+    cleanInput.startsWith(t.code.toUpperCase()) ||
+    alphaInput.startsWith(cleanAlphaNumericToken(t.code))
   ) || DEFAULT_TENANTS.find(t => 
     t.code.toUpperCase() === tokenPrefix ||
     cleanAlphaNumericToken(t.code) === alphaPrefix ||
     t.slug.toUpperCase() === tokenPrefix ||
-    cleanAlphaNumericToken(t.name) === alphaPrefix
+    cleanAlphaNumericToken(t.name) === alphaPrefix ||
+    cleanInput.startsWith(t.code.toUpperCase()) ||
+    alphaInput.startsWith(cleanAlphaNumericToken(t.code))
   );
 
   if (matchedTenantByPrefix) {
@@ -346,13 +418,14 @@ export function resolveAccessTokenOrPasskey(
       cleanInput.includes('DIRECTOR') || 
       cleanInput.includes('LEAD') ||
       cleanInput.includes('MANAGING');
-    const role: TenantRole = isMasterRole ? 'company_admin' : 'staff';
+    const isGuestRole = cleanInput.includes('GUEST') || cleanInput.includes('VISITOR');
+    const role: TenantRole = isMasterRole ? 'company_admin' : (isGuestRole ? 'guest' : 'staff');
     
     const dynamicKey: AccessKey = {
       id: `key-${matchedTenantByPrefix.code.toLowerCase()}-dynamic-${Date.now()}`,
       tenantId: matchedTenantByPrefix.id,
       token: cleanInput,
-      label: `${matchedTenantByPrefix.name} Access Token`,
+      label: `${matchedTenantByPrefix.name} ${role === 'company_admin' ? 'Admin' : role === 'guest' ? 'Guest' : 'Staff'} Token`,
       role,
       active: true,
       maxUses: 99999,

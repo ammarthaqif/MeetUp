@@ -43,7 +43,10 @@ import {
   cleanAlphaNumericToken,
   isTokenMatch,
   healAndSanitizeAccessKeys,
-  resolveAccessTokenOrPasskey
+  resolveAccessTokenOrPasskey,
+  isTokenExpired,
+  isTokenExhausted,
+  getKeyStatus
 } from './utils/security';
 import { 
   DEFAULT_TENANTS, 
@@ -297,11 +300,12 @@ export default function App() {
 
   const isTokenCompanyAdmin = !!tenantAccessToken && (
     tenantAccessToken.toUpperCase().includes('-ADMIN-') ||
+    tenantAccessToken.toUpperCase().includes('ADMIN') ||
     accessKeys.some(
-      k => k.token.trim().toLowerCase() === tenantAccessToken.trim().toLowerCase() && k.active && k.role === 'company_admin'
+      k => isTokenMatch(tenantAccessToken, k.token) && k.active && k.role === 'company_admin'
     ) ||
     DEFAULT_TENANT_ACCESS_KEYS.some(
-      k => k.token.trim().toLowerCase() === tenantAccessToken.trim().toLowerCase() && k.role === 'company_admin'
+      k => isTokenMatch(tenantAccessToken, k.token) && k.role === 'company_admin'
     )
   );
 
@@ -674,7 +678,7 @@ export default function App() {
 
   const handleGenerateTenantToken = async (tenantId: string, label: string, role: 'company_admin' | 'staff' | 'guest'): Promise<AccessKey> => {
     const tenant = tenants.find(t => t.id === tenantId) || DEFAULT_TENANTS.find(t => t.id === tenantId);
-    const prefix = tenant ? tenant.code : 'CORP';
+    const prefix = tenant ? tenant.code.toUpperCase() : 'CORP';
     const roleSlug = role === 'company_admin' ? 'ADMIN' : role === 'guest' ? 'GUEST' : 'STAFF';
     const tokenString = generateSecureToken(prefix, roleSlug);
     
@@ -706,11 +710,11 @@ export default function App() {
 
     logActivity({
       action: 'ACCESS_KEY_GENERATED',
-      details: `Issued new access key "${tokenString}" for ${tenant?.name || 'organization'} (${label}) with role ${role}.`,
+      details: `Super Admin issued new ${role.toUpperCase()} Token "${tokenString}" for ${tenant?.name || 'Organization'} (${label})`,
       tenantId
     });
 
-    showNotification('success', `Generated ${role} access key: ${tokenString}`);
+    showNotification('success', `Generated ${role.toUpperCase()} Token: ${tokenString}`);
     return newKey;
   };
 
@@ -1662,18 +1666,34 @@ export default function App() {
   };
 
   // Access Key Token Generator Handlers
-  const handleGenerateAccessKey = async (data: { label: string; expiresAt?: string; maxUses?: number }): Promise<AccessKey> => {
-    const id = `key-${Date.now()}`;
-    const prefix = activeTenant ? activeTenant.code.toUpperCase() : 'SEC';
-    const token = generateSecureToken(prefix, 'KEY');
+  const handleGenerateAccessKey = async (data: { 
+    label: string; 
+    expiresAt?: string; 
+    maxUses?: number; 
+    role?: 'company_admin' | 'staff' | 'guest'; 
+    tenantId?: string;
+  }): Promise<AccessKey> => {
+    const id = `key-${Date.now()}-${generateSecureToken('ID', 'KEY', 1).split('-')[2]}`;
+    const targetTenantId = data.tenantId || activeTenant?.id || 'ALL';
+    const targetTenant = tenants.find(t => t.id === targetTenantId) || DEFAULT_TENANTS.find(t => t.id === targetTenantId);
+    const prefix = targetTenant ? targetTenant.code.toUpperCase() : (activeTenant ? activeTenant.code.toUpperCase() : 'SEC');
+    const role = data.role || 'staff';
+    const roleSlug = role === 'company_admin' ? 'ADMIN' : role === 'guest' ? 'GUEST' : 'STAFF';
+    const token = generateSecureToken(prefix, roleSlug);
+
+    const cleanExpiresAt = (data.expiresAt && data.expiresAt.trim() !== '' && data.expiresAt.trim() !== 'never') 
+      ? data.expiresAt.trim() 
+      : undefined;
+    const cleanMaxUses = (data.maxUses && data.maxUses > 0) ? data.maxUses : undefined;
 
     const newKey: AccessKey = {
       id,
-      tenantId: activeTenant?.id || 'ALL',
+      tenantId: targetTenantId,
       token,
       label: data.label,
-      expiresAt: data.expiresAt,
-      maxUses: data.maxUses,
+      role,
+      expiresAt: cleanExpiresAt,
+      maxUses: cleanMaxUses,
       usedCount: 0,
       active: true,
       createdAt: Date.now(),
@@ -1695,8 +1715,8 @@ export default function App() {
 
     logActivity({
       action: 'ACCESS_KEY_GENERATED',
-      details: `Generated Secret Token "${newKey.label}" (${newKey.token}) with ${newKey.maxUses ? `${newKey.maxUses} uses` : 'unlimited uses'}`,
-      tenantId: activeTenant?.id
+      details: `Generated Secret Token "${newKey.label}" (${newKey.token}) for ${targetTenant ? targetTenant.name : 'All Tenants'} [${role.toUpperCase()}]`,
+      tenantId: targetTenantId === 'ALL' ? undefined : targetTenantId
     });
 
     return newKey;
@@ -1853,11 +1873,10 @@ export default function App() {
   };
 
   const handleRegenerateAllInvalidKeys = async (): Promise<number> => {
-    const today = new Date().toISOString().split('T')[0];
     const invalidKeys = accessKeys.filter(k => {
       const isInactive = !k.active;
-      const isExpired = !!k.expiresAt && k.expiresAt < today;
-      const isExhausted = !!k.maxUses && k.usedCount >= k.maxUses;
+      const isExpired = isTokenExpired(k.expiresAt);
+      const isExhausted = isTokenExhausted(k);
       return isInactive || isExpired || isExhausted;
     });
 
