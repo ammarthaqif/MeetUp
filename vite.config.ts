@@ -4,8 +4,13 @@ import path from 'path';
 import { defineConfig } from 'vite';
 
 export default defineConfig(() => {
+  const rawBase = process.env.BASE_PATH || process.env.VITE_BASE_PATH || '';
+  const base = rawBase 
+    ? (rawBase.startsWith('/') ? rawBase : `/${rawBase}`).replace(/\/+$/, '') + '/'
+    : './';
+
   return {
-    base: './',
+    base,
     plugins: [react(), tailwindcss()],
     resolve: {
       alias: {
@@ -13,6 +18,8 @@ export default defineConfig(() => {
       },
     },
     server: {
+      port: 3000,
+      host: '0.0.0.0',
       hmr: process.env.DISABLE_HMR !== 'true',
       watch: process.env.DISABLE_HMR === 'true' ? null : {},
     },
