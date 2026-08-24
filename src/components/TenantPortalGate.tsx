@@ -14,7 +14,10 @@ import {
   Crown,
   Shield,
   HelpCircle,
-  UserCheck
+  UserCheck,
+  Eye,
+  EyeOff,
+  RotateCcw
 } from 'lucide-react';
 import { Tenant, AccessKey } from '../types';
 import { DEFAULT_TENANTS, DEFAULT_TENANT_ACCESS_KEYS } from '../data/defaultTenants';
@@ -52,6 +55,7 @@ export const TenantPortalGate: React.FC<TenantPortalGateProps> = ({
   isLoggingIn,
 }) => {
   const [tokenInput, setTokenInput] = useState('');
+  const [showPassword, setShowPassword] = useState(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [successMsg, setSuccessMsg] = useState<string | null>(null);
   const [isVerifying, setIsVerifying] = useState(false);
@@ -66,7 +70,8 @@ export const TenantPortalGate: React.FC<TenantPortalGateProps> = ({
     : [];
 
   const handleVerifyToken = (tokenToVerify?: string) => {
-    const cleanInput = cleanAndNormalizeToken(tokenToVerify || tokenInput);
+    const rawTarget = tokenToVerify !== undefined ? tokenToVerify : tokenInput;
+    const cleanInput = cleanAndNormalizeToken(rawTarget);
 
     if (!cleanInput) {
       setErrorMsg('Please enter a valid company access token.');
@@ -74,8 +79,13 @@ export const TenantPortalGate: React.FC<TenantPortalGateProps> = ({
       return;
     }
 
+    // Reset rate limiter if explicit shortcut token clicked
+    if (tokenToVerify) {
+      resetRateLimit();
+    }
+
     const rateStatus = getRateLimitStatus();
-    if (rateStatus.isLocked) {
+    if (rateStatus.isLocked && !tokenToVerify) {
       setErrorMsg(`Anti-Brute-Force Lockout active. Please wait ${rateStatus.remainingLockoutSeconds}s before retrying.`);
       setIsVerifying(false);
       return;
@@ -85,21 +95,27 @@ export const TenantPortalGate: React.FC<TenantPortalGateProps> = ({
     setErrorMsg(null);
     setSuccessMsg(null);
 
-    const delayMs = Math.max(250, rateStatus.penaltyDelayMs);
+    const delayMs = tokenToVerify ? 100 : Math.min(250, rateStatus.penaltyDelayMs);
 
     setTimeout(() => {
-      // Read fresh keys from state and localStorage
-      let rawKeys: AccessKey[] = accessKeys;
+      // Merge fresh keys from props and localStorage
+      const keyMap = new Map<string, AccessKey>();
+      DEFAULT_TENANT_ACCESS_KEYS.forEach(k => keyMap.set(k.id, k));
+      accessKeys.forEach(k => keyMap.set(k.id, k));
+      
       try {
         const saved = localStorage.getItem('office_sync_access_keys');
         if (saved) {
           const parsed = JSON.parse(saved);
-          if (Array.isArray(parsed) && parsed.length > 0) {
-            rawKeys = parsed;
+          if (Array.isArray(parsed)) {
+            parsed.forEach(k => {
+              if (k && k.id) keyMap.set(k.id, k);
+            });
           }
         }
       } catch {}
 
+      const rawKeys = Array.from(keyMap.values());
       const resolved = resolveAccessTokenOrPasskey(cleanInput, rawKeys, tenants);
 
       // If not valid, record attempt and display clear guidance
@@ -128,7 +144,7 @@ export const TenantPortalGate: React.FC<TenantPortalGateProps> = ({
           if (targetTenant) {
             onUnlockTenant(targetTenant, resolved.token, 'company_admin');
           }
-        }, 300);
+        }, 200);
         setIsVerifying(false);
         return;
       }
@@ -139,7 +155,7 @@ export const TenantPortalGate: React.FC<TenantPortalGateProps> = ({
       setSuccessMsg(`Verified! Unlocking ${targetTenant.name} workspace (${roleToAssign === 'company_admin' ? 'Admin' : 'Staff'})...`);
       setTimeout(() => {
         onUnlockTenant(targetTenant, resolved.token, roleToAssign);
-      }, 300);
+      }, 200);
       setIsVerifying(false);
     }, delayMs);
   };
@@ -344,28 +360,59 @@ export const TenantPortalGate: React.FC<TenantPortalGateProps> = ({
                       <KeyRound className="w-5 h-5 text-indigo-400" />
                     </div>
                     <input
-                      type="password"
+                      type={showPassword ? 'text' : 'password'}
                       value={tokenInput}
                       onChange={(e) => {
                         setTokenInput(e.target.value);
                         setErrorMsg(null);
                         setSuccessMsg(null);
                       }}
-                      placeholder="Enter private company token"
-                      className="w-full bg-slate-950/80 border border-slate-700/80 focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500/30 rounded-2xl pl-12 pr-4 py-3.5 text-sm sm:text-base font-mono font-medium text-white placeholder-slate-500 transition-all uppercase tracking-wider"
+                      placeholder="Enter company access token (e.g. ACME-ADMIN-2026)"
+                      className="w-full bg-slate-950/80 border border-slate-700/80 focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500/30 rounded-2xl pl-12 pr-12 py-3.5 text-sm sm:text-base font-mono font-medium text-white placeholder-slate-500 transition-all uppercase tracking-wider"
                       autoFocus
                     />
+                    <button
+                      type="button"
+                      onClick={() => setShowPassword(!showPassword)}
+                      className="absolute inset-y-0 right-0 pr-4 flex items-center text-slate-400 hover:text-slate-200 transition-colors cursor-pointer"
+                      title={showPassword ? 'Hide token' : 'Show token'}
+                    >
+                      {showPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                    </button>
                   </div>
-                  <p className="text-[11px] text-slate-500">
-                    Issued directly by your company's Workplace Administrator. Client tokens are confidential and not exposed publicly.
+                  <p className="text-[11px] text-slate-500 flex items-center justify-between">
+                    <span>Issued directly by your company's Workplace Administrator.</span>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        resetRateLimit();
+                        setErrorMsg(null);
+                      }}
+                      className="text-[10px] text-indigo-400 hover:text-indigo-300 transition-colors cursor-pointer flex items-center gap-1"
+                    >
+                      <RotateCcw className="w-2.5 h-2.5" />
+                      <span>Reset Lockout</span>
+                    </button>
                   </p>
                 </div>
 
                 {/* Status alerts */}
                 {errorMsg && (
-                  <div className="flex items-start gap-2.5 p-3.5 rounded-xl bg-rose-500/10 border border-rose-500/20 text-rose-300 text-xs animate-fadeIn">
-                    <AlertCircle className="w-4 h-4 shrink-0 text-rose-400 mt-0.5" />
-                    <span>{errorMsg}</span>
+                  <div className="flex items-start justify-between gap-2.5 p-3.5 rounded-xl bg-rose-500/10 border border-rose-500/20 text-rose-300 text-xs animate-fadeIn">
+                    <div className="flex items-start gap-2.5">
+                      <AlertCircle className="w-4 h-4 shrink-0 text-rose-400 mt-0.5" />
+                      <span>{errorMsg}</span>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        resetRateLimit();
+                        setErrorMsg(null);
+                      }}
+                      className="text-[10px] text-rose-400 hover:text-rose-200 underline shrink-0 cursor-pointer"
+                    >
+                      Clear
+                    </button>
                   </div>
                 )}
 

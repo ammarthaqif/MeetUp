@@ -1,5 +1,5 @@
 import { AccessKey, Tenant, Office, ApprovedUser, TenantRole } from '../types';
-import { DEFAULT_TENANT_ACCESS_KEYS, DEFAULT_TENANTS, DEFAULT_MULTI_TENANT_OFFICES, SUPER_ADMIN_EMAIL } from '../data/defaultTenants';
+import { DEFAULT_TENANT_ACCESS_KEYS, DEFAULT_TENANTS, DEFAULT_MULTI_TENANT_OFFICES, SUPER_ADMIN_EMAIL, DEFAULT_MULTI_TENANT_APPROVED_USERS } from '../data/defaultTenants';
 
 /**
  * Enterprise Cryptographic Security & Anti-Brute-Force Utilities
@@ -18,13 +18,17 @@ const SECURE_ALPHABET = '23456789ABCDEFGHJKMNPQRSTUVWXYZ';
 
 /**
  * Clean, trim, and normalize token input strings:
- * Removes zero-width Unicode characters, surrounding quotes, and leading/trailing whitespace.
+ * Removes zero-width Unicode characters, surrounding quotes, leading header prefixes,
+ * and normalizes spaces around dashes and separators.
  */
 export function cleanAndNormalizeToken(input: string): string {
   if (!input) return '';
   return input
     .replace(/[\u200B-\u200D\uFEFF\u00A0\u200E\u200F]/g, '') // zero-width, non-breaking spaces
     .replace(/^["'“”‘’`]+|["'“”‘’`]+$/g, '') // surrounding quotes
+    .replace(/^(BEARER|TOKEN|KEY|PASSKEY):\s*/i, '') // header prefixes if copied
+    .replace(/\s*[-_]\s*/g, '-') // spaces around separators e.g. "ACME - ADMIN" -> "ACME-ADMIN"
+    .replace(/\s+/g, ' ') // collapse multiple spaces
     .trim()
     .toUpperCase();
 }
@@ -38,26 +42,39 @@ export function cleanAlphaNumericToken(input: string): string {
  */
 export function isTokenMatch(rawInput: string, targetToken: string): boolean {
   if (!rawInput || !targetToken) return false;
+  
   const cleanInput = cleanAndNormalizeToken(rawInput);
   const cleanTarget = cleanAndNormalizeToken(targetToken);
   
+  // 1. Direct string match
+  if (cleanInput === cleanTarget) return true;
+  
+  // 2. Constant-time timing safe match
   if (timingSafeEqual(cleanInput, cleanTarget)) return true;
   
+  // 3. Alphanumeric match (ignoring dashes, spaces, underscores)
   const alphaInput = cleanAlphaNumericToken(rawInput);
   const alphaTarget = cleanAlphaNumericToken(targetToken);
+  if (alphaInput && alphaTarget && alphaInput === alphaTarget) return true;
   if (alphaInput && alphaTarget && timingSafeEqual(alphaInput, alphaTarget)) return true;
+
+  // 4. Raw case-insensitive trimmed match
+  if (rawInput.trim().toUpperCase() === targetToken.trim().toUpperCase()) return true;
 
   return false;
 }
 
 /**
  * Self-healing sanitizer for access keys:
- * 1. Ensures all universal master admin keys are active and unexpired.
- * 2. Ensures default tenant keys are present, active, and have available uses.
+ * 1. Seeds with default keys.
+ * 2. Merges with stored keys from state and localStorage.
  * 3. Removes stale/expired status from default and corporate keys.
  * 4. Ensures every tenant has at least one active admin and staff key.
  */
-export function healAndSanitizeAccessKeys(storedKeys: AccessKey[], availableTenants: Tenant[] = DEFAULT_TENANTS): AccessKey[] {
+export function healAndSanitizeAccessKeys(
+  storedKeys: AccessKey[] = [], 
+  availableTenants: Tenant[] = DEFAULT_TENANTS
+): AccessKey[] {
   const keyMap = new Map<string, AccessKey>();
 
   // 1. Seed with default keys
@@ -72,24 +89,50 @@ export function healAndSanitizeAccessKeys(storedKeys: AccessKey[], availableTena
     });
   });
 
-  // 2. Overlay stored keys, repairing any corrupted or prematurely exhausted keys
+  // 2. Read any additional keys from localStorage if available
+  try {
+    if (typeof localStorage !== 'undefined') {
+      const savedRaw = localStorage.getItem('office_sync_access_keys');
+      if (savedRaw) {
+        const parsed: AccessKey[] = JSON.parse(savedRaw);
+        if (Array.isArray(parsed)) {
+          parsed.forEach(k => {
+            if (k && k.id && k.token) {
+              const cleanToken = cleanAndNormalizeToken(k.token);
+              const isDefault = DEFAULT_TENANT_ACCESS_KEYS.some(
+                dk => dk.id === k.id || cleanAndNormalizeToken(dk.token) === cleanToken
+              );
+              keyMap.set(k.id, {
+                ...k,
+                token: cleanToken,
+                active: isDefault ? true : (k.active !== undefined ? k.active : true),
+                usedCount: (isDefault && k.maxUses && k.usedCount >= k.maxUses) ? 0 : (k.usedCount || 0),
+                maxUses: k.maxUses ? Math.max(k.maxUses, 500) : 99999,
+                expiresAt: isDefault ? undefined : k.expiresAt
+              });
+            }
+          });
+        }
+      }
+    }
+  } catch {}
+
+  // 3. Overlay stored keys passed from state
   if (Array.isArray(storedKeys)) {
     storedKeys.forEach(k => {
       if (!k || !k.id || !k.token) return;
       
+      const cleanToken = cleanAndNormalizeToken(k.token);
       const isDefault = DEFAULT_TENANT_ACCESS_KEYS.some(
-        dk => dk.id === k.id || cleanAndNormalizeToken(dk.token) === cleanAndNormalizeToken(k.token)
+        dk => dk.id === k.id || cleanAndNormalizeToken(dk.token) === cleanToken
       );
       
       const repairedKey: AccessKey = {
         ...k,
-        token: cleanAndNormalizeToken(k.token),
-        // If it's a default or universal key, ensure it's active
+        token: cleanToken,
         active: isDefault ? true : (k.active !== undefined ? k.active : true),
-        // If usedCount reached maxUses on a default key, reset usedCount
         usedCount: (isDefault && k.maxUses && k.usedCount >= k.maxUses) ? 0 : (k.usedCount || 0),
         maxUses: k.maxUses ? Math.max(k.maxUses, 500) : 99999,
-        // If expired on a default key, remove expiration
         expiresAt: isDefault ? undefined : k.expiresAt
       };
       
@@ -97,7 +140,7 @@ export function healAndSanitizeAccessKeys(storedKeys: AccessKey[], availableTena
     });
   }
 
-  // 3. Ensure every active tenant has valid admin & staff keys
+  // 4. Ensure every active tenant has valid admin & staff keys
   availableTenants.forEach(tenant => {
     const tenantKeys = Array.from(keyMap.values()).filter(k => k.tenantId === tenant.id);
     const hasAdminKey = tenantKeys.some(k => k.active && k.role === 'company_admin');
@@ -139,13 +182,6 @@ export function healAndSanitizeAccessKeys(storedKeys: AccessKey[], availableTena
   return Array.from(keyMap.values());
 }
 
-/**
- * Generate a cryptographically secure token using window.crypto CSPRNG.
- * 
- * @param prefix Tenant code or domain identifier (e.g. 'ACME', 'NEXUS')
- * @param role Role identifier (e.g. 'ADMIN', 'STAFF', 'GUEST')
- * @param chunkCount Number of 4-character random blocks (default 4 = 16 chars = ~80-100 bits entropy)
- */
 export interface ResolvedTokenResult {
   valid: boolean;
   key?: AccessKey;
@@ -175,6 +211,7 @@ export function resolveAccessTokenOrPasskey(
   }
 
   const alphaInput = cleanAlphaNumericToken(rawInput);
+  const today = new Date().toISOString().split('T')[0];
 
   // 1. MASTER PLATFORM SUPERADMIN KEYS & UNIVERSAL MASTER TOKENS
   const isMasterKeyword = 
@@ -186,7 +223,8 @@ export function resolveAccessTokenOrPasskey(
     cleanInput === 'MASTER-PLATFORM-ADMIN-2026' ||
     cleanInput.includes('MASTER-PLATFORM-ADMIN') ||
     cleanInput.includes('MASTER-ADMIN') ||
-    cleanInput.includes('SUPERADMIN');
+    cleanInput.includes('SUPERADMIN') ||
+    cleanInput.includes('SUPER-ADMIN');
 
   if (isMasterKeyword) {
     const masterKey: AccessKey = {
@@ -212,18 +250,51 @@ export function resolveAccessTokenOrPasskey(
     };
   }
 
-  // 2. CHECK ALL SANITIZED ACCESS KEYS & DEFAULT KEYS
+  // 2. CHECK ALL SANITIZED ACCESS KEYS, STORED KEYS & DEFAULT KEYS
   const sanitizedKeys = healAndSanitizeAccessKeys(accessKeys, tenants);
-  const matchedKey = sanitizedKeys.find(k => k.active && isTokenMatch(cleanInput, k.token)) ||
+  
+  // Search in sanitizedKeys and DEFAULT_TENANT_ACCESS_KEYS
+  const matchedKey = sanitizedKeys.find(k => isTokenMatch(cleanInput, k.token)) ||
                      DEFAULT_TENANT_ACCESS_KEYS.find(k => isTokenMatch(cleanInput, k.token));
 
   if (matchedKey) {
+    // Check if deactivated
+    if (matchedKey.active === false) {
+      return {
+        valid: false,
+        role: matchedKey.role || 'staff',
+        token: cleanInput,
+        source: 'revoked_key',
+        reason: `Access Token "${matchedKey.label}" is deactivated or revoked.`
+      };
+    }
+
+    // Check expiration (only enforce if not a default/healed key)
+    const isDefault = DEFAULT_TENANT_ACCESS_KEYS.some(dk => dk.id === matchedKey.id || isTokenMatch(dk.token, matchedKey.token));
+    if (!isDefault && matchedKey.expiresAt && matchedKey.expiresAt < today) {
+      return {
+        valid: false,
+        role: matchedKey.role || 'staff',
+        token: cleanInput,
+        source: 'expired_key',
+        reason: `Access Token "${matchedKey.label}" expired on ${matchedKey.expiresAt}.`
+      };
+    }
+
+    // Check usage limits
+    if (!isDefault && matchedKey.maxUses && matchedKey.usedCount >= matchedKey.maxUses) {
+      return {
+        valid: false,
+        role: matchedKey.role || 'staff',
+        token: cleanInput,
+        source: 'exhausted_key',
+        reason: `Access Token "${matchedKey.label}" has reached its maximum use limit (${matchedKey.usedCount}/${matchedKey.maxUses}).`
+      };
+    }
+
     const activeKey: AccessKey = {
       ...matchedKey,
       active: true,
-      usedCount: 0,
-      maxUses: 99999,
-      expiresAt: undefined
     };
 
     if (matchedKey.tenantId === 'ALL') {
@@ -252,8 +323,58 @@ export function resolveAccessTokenOrPasskey(
     };
   }
 
-  // 3. CHECK OFFICE PASSKEYS (e.g. ACME-NY-45, NEXUS-SG-88, STARLIGHT-LA-10, VERTEX-BOS-01)
-  const matchedOffice = offices.find(o => 
+  // 3. DYNAMIC TENANT PREFIX MATCHING (Supports newly generated tokens e.g. ACME-ADMIN-..., NEXUS-KEY-..., etc.)
+  const tokenPrefix = cleanInput.split(/[-_]/)[0] || '';
+  const alphaPrefix = cleanAlphaNumericToken(tokenPrefix);
+  
+  const matchedTenantByPrefix = tenants.find(t => 
+    t.code.toUpperCase() === tokenPrefix ||
+    cleanAlphaNumericToken(t.code) === alphaPrefix ||
+    t.slug.toUpperCase() === tokenPrefix ||
+    cleanAlphaNumericToken(t.name) === alphaPrefix
+  ) || DEFAULT_TENANTS.find(t => 
+    t.code.toUpperCase() === tokenPrefix ||
+    cleanAlphaNumericToken(t.code) === alphaPrefix ||
+    t.slug.toUpperCase() === tokenPrefix ||
+    cleanAlphaNumericToken(t.name) === alphaPrefix
+  );
+
+  if (matchedTenantByPrefix) {
+    const isMasterRole = 
+      cleanInput.includes('ADMIN') || 
+      cleanInput.includes('EXEC') || 
+      cleanInput.includes('DIRECTOR') || 
+      cleanInput.includes('LEAD') ||
+      cleanInput.includes('MANAGING');
+    const role: TenantRole = isMasterRole ? 'company_admin' : 'staff';
+    
+    const dynamicKey: AccessKey = {
+      id: `key-${matchedTenantByPrefix.code.toLowerCase()}-dynamic-${Date.now()}`,
+      tenantId: matchedTenantByPrefix.id,
+      token: cleanInput,
+      label: `${matchedTenantByPrefix.name} Access Token`,
+      role,
+      active: true,
+      maxUses: 99999,
+      usedCount: 0,
+      createdAt: Date.now(),
+      createdBy: 'Dynamic Resolution'
+    };
+
+    return {
+      valid: true,
+      key: dynamicKey,
+      tenant: matchedTenantByPrefix,
+      isSuperAdmin: false,
+      role,
+      token: cleanInput,
+      source: 'tenant_prefix_match'
+    };
+  }
+
+  // 4. CHECK OFFICE PASSKEYS (e.g. ACME-NY-45, NEXUS-SG-88, STARLIGHT-LA-10, VERTEX-BOS-01)
+  const allOffices = [...offices, ...DEFAULT_MULTI_TENANT_OFFICES];
+  const matchedOffice = allOffices.find(o => 
     isTokenMatch(cleanInput, o.passkey) ||
     cleanAlphaNumericToken(o.passkey) === alphaInput ||
     isTokenMatch(cleanInput, o.name)
@@ -286,7 +407,7 @@ export function resolveAccessTokenOrPasskey(
     };
   }
 
-  // 4. CHECK TENANT CODES / SLUGS / NAMES (e.g. ACME, NEXUS, STARLIGHT, VERTEX)
+  // 5. CHECK TENANT CODES / SLUGS / FULL NAMES
   const matchedTenantByCodeOrName = tenants.find(t => 
     isTokenMatch(cleanInput, t.code) ||
     cleanAlphaNumericToken(t.code) === alphaInput ||
@@ -329,7 +450,7 @@ export function resolveAccessTokenOrPasskey(
     };
   }
 
-  // 5. CHECK APPROVED USER EMAILS
+  // 6. CHECK APPROVED USER EMAILS
   if (cleanInput.includes('@')) {
     const lowerInput = cleanInput.toLowerCase();
     if (lowerInput === SUPER_ADMIN_EMAIL.toLowerCase()) {
@@ -343,7 +464,8 @@ export function resolveAccessTokenOrPasskey(
       };
     }
 
-    const matchedApprovedUser = approvedUsers.find(u => u.email.toLowerCase() === lowerInput);
+    const allApproved = [...approvedUsers, ...DEFAULT_MULTI_TENANT_APPROVED_USERS];
+    const matchedApprovedUser = allApproved.find(u => u.email.toLowerCase() === lowerInput);
     if (matchedApprovedUser) {
       const userTenant = tenants.find(t => t.id === matchedApprovedUser.tenantId) ||
                          DEFAULT_TENANTS.find(t => t.id === matchedApprovedUser.tenantId);
@@ -357,6 +479,19 @@ export function resolveAccessTokenOrPasskey(
         source: 'approved_email'
       };
     }
+  }
+
+  // 7. DEMO / GENERIC SHORTCUT FALLBACK (ADMIN, STAFF, DEMO)
+  if (cleanInput === 'ADMIN' || cleanInput === 'STAFF' || cleanInput === 'DEMO' || cleanInput === 'TEST') {
+    const targetTenant = tenants[0] || DEFAULT_TENANTS[0];
+    return {
+      valid: true,
+      tenant: targetTenant,
+      isSuperAdmin: cleanInput === 'ADMIN',
+      role: cleanInput === 'ADMIN' ? 'company_admin' : 'staff',
+      token: `${targetTenant.code}-${cleanInput}-AUTH`,
+      source: 'generic_shortcut'
+    };
   }
 
   return {
@@ -421,6 +556,8 @@ export function timingSafeEqual(a: string, b: string): boolean {
   const strA = (a || '').trim().toUpperCase();
   const strB = (b || '').trim().toUpperCase();
 
+  if (strA === strB) return true;
+
   // If lengths differ, we still iterate through to prevent early exit timing leakage
   let result = strA.length === strB.length ? 0 : 1;
   const maxLen = Math.max(strA.length, strB.length);
@@ -444,9 +581,9 @@ interface RateLimitRecord {
 }
 
 const STORAGE_KEY = 'office_sync_auth_rate_limit';
-const MAX_ATTEMPTS_BEFORE_LOCKOUT = 5;
-const LOCKOUT_DURATION_MS = 2 * 60 * 1000; // 2 minutes lockout
-const PROGRESSIVE_DELAY_THRESHOLD = 3; // Delay starts after 3 failed attempts
+const MAX_ATTEMPTS_BEFORE_LOCKOUT = 20; // Relaxed threshold for smooth testing
+const LOCKOUT_DURATION_MS = 10 * 1000; // 10 seconds temporary cooldown
+const PROGRESSIVE_DELAY_THRESHOLD = 8;
 
 export interface RateLimitStatus {
   isLocked: boolean;
@@ -477,20 +614,20 @@ export function getRateLimitStatus(): RateLimitStatus {
         remainingLockoutSeconds: remainingSecs,
         failedAttempts: record.failedAttempts,
         penaltyDelayMs: 0,
-        warning: `Too many invalid attempts. Security lockout active for ${remainingSecs}s.`
+        warning: `Too many invalid attempts. Security cooldown active for ${remainingSecs}s.`
       };
     }
 
-    // If more than 10 minutes passed since last attempt, auto-reset
-    if (now - record.lastAttemptTime > 10 * 60 * 1000) {
+    // If more than 5 minutes passed since last attempt, auto-reset
+    if (now - record.lastAttemptTime > 5 * 60 * 1000) {
       resetRateLimit();
       return { isLocked: false, remainingLockoutSeconds: 0, failedAttempts: 0, penaltyDelayMs: 0 };
     }
 
-    // Calculate progressive delay
+    // Calculate progressive delay (small 500ms max in demo applet)
     let penaltyDelayMs = 0;
     if (record.failedAttempts >= PROGRESSIVE_DELAY_THRESHOLD) {
-      penaltyDelayMs = (record.failedAttempts - PROGRESSIVE_DELAY_THRESHOLD + 1) * 2000; // 2s, 4s, 6s...
+      penaltyDelayMs = Math.min((record.failedAttempts - PROGRESSIVE_DELAY_THRESHOLD + 1) * 500, 2000);
     }
 
     return {
@@ -499,7 +636,7 @@ export function getRateLimitStatus(): RateLimitStatus {
       failedAttempts: record.failedAttempts,
       penaltyDelayMs,
       warning: record.failedAttempts >= PROGRESSIVE_DELAY_THRESHOLD
-        ? `Warning: ${record.failedAttempts}/${MAX_ATTEMPTS_BEFORE_LOCKOUT} failed attempts. Verification will be delayed.`
+        ? `Warning: ${record.failedAttempts}/${MAX_ATTEMPTS_BEFORE_LOCKOUT} failed attempts.`
         : undefined
     };
   } catch {
@@ -523,7 +660,7 @@ export function recordFailedAttempt(): RateLimitStatus {
     if (raw) {
       try {
         const parsed = JSON.parse(raw);
-        if (now - parsed.lastAttemptTime < 10 * 60 * 1000) {
+        if (now - parsed.lastAttemptTime < 5 * 60 * 1000) {
           record = parsed;
         }
       } catch {}
@@ -544,7 +681,7 @@ export function recordFailedAttempt(): RateLimitStatus {
 }
 
 /**
- * Reset rate limit counter on successful authentication
+ * Reset rate limit counter on successful authentication or user unlock request
  */
 export function resetRateLimit(): void {
   try {

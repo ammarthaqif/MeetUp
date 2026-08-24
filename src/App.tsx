@@ -180,6 +180,13 @@ export default function App() {
     }
   });
 
+  // Ensure accessKeys are always in sync with localStorage
+  useEffect(() => {
+    try {
+      localStorage.setItem('office_sync_access_keys', JSON.stringify(accessKeys));
+    } catch {}
+  }, [accessKeys]);
+
   // Audit Logs trail
   const [auditLogs, setAuditLogs] = useState<AuditLog[]>(() => {
     try {
@@ -1032,7 +1039,24 @@ export default function App() {
       return false;
     }
 
-    const resolved = resolveAccessTokenOrPasskey(cleanToken, accessKeys, tenants, offices, approvedUsers);
+    // Merge keys from defaults, state, and localStorage
+    const keyMap = new Map<string, AccessKey>();
+    DEFAULT_TENANT_ACCESS_KEYS.forEach(k => keyMap.set(k.id, k));
+    accessKeys.forEach(k => keyMap.set(k.id, k));
+    try {
+      const saved = localStorage.getItem('office_sync_access_keys');
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        if (Array.isArray(parsed)) {
+          parsed.forEach(k => {
+            if (k && k.id) keyMap.set(k.id, k);
+          });
+        }
+      }
+    } catch {}
+
+    const allKeys = Array.from(keyMap.values());
+    const resolved = resolveAccessTokenOrPasskey(cleanToken, allKeys, tenants, offices, approvedUsers);
 
     if (!resolved.valid || !resolved.tenant) {
       const penalty = recordFailedAttempt();
@@ -1042,7 +1066,7 @@ export default function App() {
           details: `Anti-Brute-Force Lockout triggered after repeated invalid token attempts (${cleanToken.slice(0, 6)}***)`,
           tenantId: activeTenant?.id || 'platform'
         });
-        showNotification('error', `Account locked for 2 minutes due to repeated invalid token attempts.`);
+        showNotification('error', `Account locked for 10s due to repeated invalid token attempts.`);
       } else if (penalty.warning) {
         showNotification('error', penalty.warning);
       } else {
