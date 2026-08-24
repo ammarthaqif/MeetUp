@@ -255,8 +255,9 @@ export interface ResolvedTokenResult {
 }
 
 /**
- * Universal, ultra-resilient Token and Passkey Resolver:
- * Accepts Secret Access Tokens, Master Universal Keys, Office Passkeys, Tenant Codes, or Super Admin credentials.
+ * Universal, high-security Token and Passkey Resolver:
+ * Resolves Secret Access Tokens, Master Universal Keys, Office Passkeys, Tenant Codes, and SSO credentials
+ * with STRICT tenant binding, ensuring tokens generated for one client CANNOT access another client's dashboard.
  */
 export function resolveAccessTokenOrPasskey(
   rawInput: string,
@@ -271,22 +272,18 @@ export function resolveAccessTokenOrPasskey(
   }
 
   const alphaInput = cleanAlphaNumericToken(rawInput);
-  const today = new Date().toISOString().split('T')[0];
+  const allTenantsList = Array.from(new Map([...DEFAULT_TENANTS, ...tenants].map(t => [t.id, t])).values());
 
   // 1. MASTER PLATFORM SUPERADMIN KEYS & UNIVERSAL MASTER TOKENS
-  const isMasterKeyword = 
-    cleanInput === 'MASTER' ||
-    cleanInput === 'SUPERADMIN' ||
+  const isMasterExactToken = 
+    cleanInput === 'MASTER-PLATFORM-ADMIN-2026' ||
+    cleanInput === 'MASTER-ADMIN-2026' ||
     cleanInput === 'SUPERADMIN-AUTH' ||
     cleanInput === 'ADMIN-UNIVERSAL-2026' ||
-    cleanInput === 'MASTER-ADMIN-2026' ||
-    cleanInput === 'MASTER-PLATFORM-ADMIN-2026' ||
-    cleanInput.includes('MASTER-PLATFORM-ADMIN') ||
-    cleanInput.includes('MASTER-ADMIN') ||
-    cleanInput.includes('SUPERADMIN') ||
-    cleanInput.includes('SUPER-ADMIN');
+    cleanInput === 'SUPERADMIN' ||
+    cleanInput === 'MASTER';
 
-  if (isMasterKeyword) {
+  if (isMasterExactToken) {
     const masterKey: AccessKey = {
       id: 'key-master-platform-admin-resolved',
       tenantId: 'ALL',
@@ -329,7 +326,7 @@ export function resolveAccessTokenOrPasskey(
       };
     }
 
-    // Check expiration (only enforce if not a default/healed key)
+    // Check expiration
     const isDefault = DEFAULT_TENANT_ACCESS_KEYS.some(dk => dk.id === matchedKey.id || isTokenMatch(dk.token, matchedKey.token));
     if (!isDefault && isTokenExpired(matchedKey.expiresAt)) {
       return {
@@ -357,6 +354,7 @@ export function resolveAccessTokenOrPasskey(
       active: true,
     };
 
+    // Universal superadmin key
     if (matchedKey.tenantId === 'ALL') {
       return {
         valid: true,
@@ -369,11 +367,30 @@ export function resolveAccessTokenOrPasskey(
       };
     }
 
-    // Robust tenant resolution
-    const matchedTenant = tenants.find(t => t.id === matchedKey.tenantId) ||
-                          DEFAULT_TENANTS.find(t => t.id === matchedKey.tenantId) ||
-                          tenants.find(t => isTokenMatch(cleanInput, t.code) || cleanInput.startsWith(t.code.toUpperCase())) ||
-                          DEFAULT_TENANTS.find(t => isTokenMatch(cleanInput, t.code) || cleanInput.startsWith(t.code.toUpperCase()));
+    // Strict Tenant Resolution by exact tenantId
+    let matchedTenant = allTenantsList.find(t => t.id === matchedKey.tenantId);
+
+    // If not found by tenantId, inspect discrete token prefix
+    if (!matchedTenant) {
+      const keyPrefix = cleanAndNormalizeToken(matchedKey.token).split(/[-_\s]+/)[0];
+      if (keyPrefix) {
+        matchedTenant = allTenantsList.find(t => 
+          t.code.toUpperCase() === keyPrefix || 
+          t.slug.toUpperCase() === keyPrefix ||
+          cleanAlphaNumericToken(t.code) === cleanAlphaNumericToken(keyPrefix)
+        );
+      }
+    }
+
+    if (!matchedTenant) {
+      return {
+        valid: false,
+        role: matchedKey.role || 'staff',
+        token: cleanInput,
+        source: 'orphaned_key',
+        reason: 'The client organization associated with this access key is no longer available.'
+      };
+    }
 
     const determinedRole: TenantRole = activeKey.role || 
       (activeKey.token.includes('ADMIN') || activeKey.token.includes('EXEC') ? 'company_admin' : 
@@ -382,7 +399,7 @@ export function resolveAccessTokenOrPasskey(
     return {
       valid: true,
       key: activeKey,
-      tenant: matchedTenant || tenants[0] || DEFAULT_TENANTS[0],
+      tenant: matchedTenant,
       isSuperAdmin: false,
       role: determinedRole,
       token: activeKey.token,
@@ -390,83 +407,80 @@ export function resolveAccessTokenOrPasskey(
     };
   }
 
-  // 3. DYNAMIC TENANT PREFIX & SMART SUBSTRING MATCHING (Supports newly generated tokens e.g. ACME-ADMIN-..., NEXUS-KEY-..., etc.)
+  // 3. DYNAMIC TENANT PREFIX MATCHING (Supports newly generated tokens e.g. ACME-ADMIN-..., NEXUS-STAFF-..., VERTEX-GUEST-...)
   const tokenParts = cleanInput.split(/[-_\s]+/);
   const tokenPrefix = tokenParts[0] || '';
   const alphaPrefix = cleanAlphaNumericToken(tokenPrefix);
-  
-  // Find tenant by prefix or any contained tenant code/name substring
-  const matchedTenantByPrefix = tenants.find(t => 
-    t.code.toUpperCase() === tokenPrefix ||
-    cleanAlphaNumericToken(t.code) === alphaPrefix ||
-    t.slug.toUpperCase() === tokenPrefix ||
-    cleanAlphaNumericToken(t.name) === alphaPrefix ||
-    cleanInput.startsWith(t.code.toUpperCase()) ||
-    alphaInput.startsWith(cleanAlphaNumericToken(t.code)) ||
-    cleanInput.includes(t.code.toUpperCase()) ||
-    alphaInput.includes(cleanAlphaNumericToken(t.code))
-  ) || DEFAULT_TENANTS.find(t => 
-    t.code.toUpperCase() === tokenPrefix ||
-    cleanAlphaNumericToken(t.code) === alphaPrefix ||
-    t.slug.toUpperCase() === tokenPrefix ||
-    cleanAlphaNumericToken(t.name) === alphaPrefix ||
-    cleanInput.startsWith(t.code.toUpperCase()) ||
-    alphaInput.startsWith(cleanAlphaNumericToken(t.code)) ||
-    cleanInput.includes(t.code.toUpperCase()) ||
-    alphaInput.includes(cleanAlphaNumericToken(t.code))
-  );
 
-  if (matchedTenantByPrefix) {
-    const isMasterRole = 
-      cleanInput.includes('ADMIN') || 
-      cleanInput.includes('EXEC') || 
-      cleanInput.includes('DIRECTOR') || 
-      cleanInput.includes('LEAD') ||
-      cleanInput.includes('MANAGING');
-    const isGuestRole = cleanInput.includes('GUEST') || cleanInput.includes('VISITOR');
-    const role: TenantRole = isMasterRole ? 'company_admin' : (isGuestRole ? 'guest' : 'staff');
-    
-    const dynamicKey: AccessKey = {
-      id: `key-${matchedTenantByPrefix.code.toLowerCase()}-dynamic-${Date.now()}`,
-      tenantId: matchedTenantByPrefix.id,
-      token: cleanInput,
-      label: `${matchedTenantByPrefix.name} ${role === 'company_admin' ? 'Admin' : role === 'guest' ? 'Guest' : 'Staff'} Token`,
-      role,
-      active: true,
-      maxUses: 99999,
-      usedCount: 0,
-      createdAt: Date.now(),
-      createdBy: 'Dynamic Resolution'
-    };
+  if (tokenPrefix && tokenPrefix.length >= 2) {
+    // Find tenant whose code or slug STRICTLY equals this discrete prefix (no fuzzy substring inclusion)
+    const matchedTenantByPrefix = allTenantsList.find(t => 
+      t.code.toUpperCase() === tokenPrefix ||
+      cleanAlphaNumericToken(t.code) === alphaPrefix ||
+      t.slug.toUpperCase() === tokenPrefix ||
+      cleanAlphaNumericToken(t.name) === alphaPrefix
+    );
 
-    return {
-      valid: true,
-      key: dynamicKey,
-      tenant: matchedTenantByPrefix,
-      isSuperAdmin: false,
-      role,
-      token: cleanInput,
-      source: 'tenant_prefix_match'
-    };
+    if (matchedTenantByPrefix) {
+      const isMasterRole = 
+        cleanInput.includes('ADMIN') || 
+        cleanInput.includes('EXEC') || 
+        cleanInput.includes('DIRECTOR') || 
+        cleanInput.includes('LEAD') ||
+        cleanInput.includes('MANAGING');
+      const isGuestRole = cleanInput.includes('GUEST') || cleanInput.includes('VISITOR');
+      const role: TenantRole = isMasterRole ? 'company_admin' : (isGuestRole ? 'guest' : 'staff');
+      
+      const dynamicKey: AccessKey = {
+        id: `key-${matchedTenantByPrefix.code.toLowerCase()}-dynamic-${Date.now()}`,
+        tenantId: matchedTenantByPrefix.id,
+        token: cleanInput,
+        label: `${matchedTenantByPrefix.name} ${role === 'company_admin' ? 'Admin' : role === 'guest' ? 'Guest' : 'Staff'} Token`,
+        role,
+        active: true,
+        maxUses: 99999,
+        usedCount: 0,
+        createdAt: Date.now(),
+        createdBy: 'Dynamic Resolution'
+      };
+
+      return {
+        valid: true,
+        key: dynamicKey,
+        tenant: matchedTenantByPrefix,
+        isSuperAdmin: false,
+        role,
+        token: cleanInput,
+        source: 'tenant_prefix_match'
+      };
+    }
   }
 
-  // 4. CHECK OFFICE PASSKEYS (e.g. ACME-NY-45, NEXUS-SG-88, STARLIGHT-LA-10, VERTEX-BOS-01)
+  // 4. CHECK OFFICE PASSKEYS (e.g. ACME-NY-45, NEXUS-SG-88, STARLIGHT-LA-10, VERTEX-AI-500)
   const allOffices = [...offices, ...DEFAULT_MULTI_TENANT_OFFICES];
   const matchedOffice = allOffices.find(o => 
     isTokenMatch(cleanInput, o.passkey) ||
     cleanAlphaNumericToken(o.passkey) === alphaInput ||
-    isTokenMatch(cleanInput, o.name) ||
-    (cleanInput.length >= 4 && (o.passkey.toUpperCase().includes(cleanInput) || cleanInput.includes(cleanAlphaNumericToken(o.passkey))))
+    (o.passkey && cleanInput.length >= 4 && cleanAlphaNumericToken(o.passkey) === alphaInput)
   );
 
   if (matchedOffice) {
-    const officeTenant = tenants.find(t => t.id === matchedOffice.tenantId) ||
-                         DEFAULT_TENANTS.find(t => t.id === matchedOffice.tenantId);
+    const officeTenant = allTenantsList.find(t => t.id === matchedOffice.tenantId);
+    if (!officeTenant) {
+      return {
+        valid: false,
+        role: 'staff',
+        token: cleanInput,
+        source: 'unlinked_office',
+        reason: 'Office passkey belongs to an unrecognized organization.'
+      };
+    }
+
     const dynamicKey: AccessKey = {
       id: `key-office-${matchedOffice.id}-passkey`,
-      tenantId: matchedOffice.tenantId || (officeTenant ? officeTenant.id : 'ALL'),
+      tenantId: matchedOffice.tenantId || officeTenant.id,
       token: matchedOffice.passkey,
-      label: `${matchedOffice.name} Passkey Key`,
+      label: `${matchedOffice.name} Passkey`,
       role: 'staff',
       active: true,
       maxUses: 99999,
@@ -477,7 +491,7 @@ export function resolveAccessTokenOrPasskey(
     return {
       valid: true,
       key: dynamicKey,
-      tenant: officeTenant || tenants[0] || DEFAULT_TENANTS[0],
+      tenant: officeTenant,
       office: matchedOffice,
       isSuperAdmin: false,
       role: 'staff',
@@ -486,20 +500,12 @@ export function resolveAccessTokenOrPasskey(
     };
   }
 
-  // 5. CHECK TENANT CODES / SLUGS / FULL NAMES
-  const matchedTenantByCodeOrName = tenants.find(t => 
+  // 5. CHECK DIRECT TENANT CODE / SLUG / EXACT NAME (e.g. user typed "ACME", "NEXUS", "STARLIGHT", "VERTEX")
+  const matchedTenantByCodeOrName = allTenantsList.find(t => 
     isTokenMatch(cleanInput, t.code) ||
     cleanAlphaNumericToken(t.code) === alphaInput ||
-    cleanInput.startsWith(t.code.toUpperCase()) ||
-    alphaInput.startsWith(cleanAlphaNumericToken(t.code)) ||
     isTokenMatch(cleanInput, t.slug) ||
-    isTokenMatch(cleanInput, t.name)
-  ) || DEFAULT_TENANTS.find(t => 
-    isTokenMatch(cleanInput, t.code) ||
-    cleanAlphaNumericToken(t.code) === alphaInput ||
-    cleanInput.startsWith(t.code.toUpperCase()) ||
-    alphaInput.startsWith(cleanAlphaNumericToken(t.code)) ||
-    isTokenMatch(cleanInput, t.slug) ||
+    cleanAlphaNumericToken(t.slug) === alphaInput ||
     isTokenMatch(cleanInput, t.name)
   );
 
@@ -510,7 +516,7 @@ export function resolveAccessTokenOrPasskey(
       id: `key-${matchedTenantByCodeOrName.code.toLowerCase()}-auto-resolved`,
       tenantId: matchedTenantByCodeOrName.id,
       token: cleanInput,
-      label: `${matchedTenantByCodeOrName.name} Authorized Access Key`,
+      label: `${matchedTenantByCodeOrName.name} Authorized Key`,
       role,
       active: true,
       maxUses: 99999,
@@ -529,7 +535,7 @@ export function resolveAccessTokenOrPasskey(
     };
   }
 
-  // 6. CHECK APPROVED USER EMAILS OR ANY USER EMAIL INPUT
+  // 6. CHECK APPROVED USER EMAILS OR SSO DOMAINS
   if (cleanInput.includes('@')) {
     const lowerInput = cleanInput.toLowerCase();
     const isSuperAdminEmail = 
@@ -552,104 +558,64 @@ export function resolveAccessTokenOrPasskey(
     const allApproved = [...approvedUsers, ...DEFAULT_MULTI_TENANT_APPROVED_USERS];
     const matchedApprovedUser = allApproved.find(u => u.email.toLowerCase() === lowerInput);
     if (matchedApprovedUser) {
-      const userTenant = tenants.find(t => t.id === matchedApprovedUser.tenantId) ||
-                         DEFAULT_TENANTS.find(t => t.id === matchedApprovedUser.tenantId);
-      const isFocalAdmin = userTenant?.focalAdminEmails?.some(e => e.toLowerCase() === lowerInput);
-      return {
-        valid: true,
-        tenant: userTenant || tenants[0] || DEFAULT_TENANTS[0],
-        isSuperAdmin: false,
-        role: isFocalAdmin ? 'company_admin' : 'staff',
-        token: `${userTenant ? userTenant.code : 'CORP'}-USER-AUTH`,
-        source: 'approved_email'
-      };
+      const userTenant = allTenantsList.find(t => t.id === matchedApprovedUser.tenantId);
+      if (userTenant) {
+        const isFocalAdmin = userTenant.focalAdminEmails?.some(e => e.toLowerCase() === lowerInput);
+        return {
+          valid: true,
+          tenant: userTenant,
+          isSuperAdmin: false,
+          role: isFocalAdmin ? 'company_admin' : 'staff',
+          token: `${userTenant.code}-USER-AUTH`,
+          source: 'approved_email'
+        };
+      }
     }
 
-    // Attempt to match company domain from email (e.g. user@acme.com -> Acme)
+    // Match exact company domain from email (e.g. user@nexuscapital.com -> Nexus)
     const emailDomain = lowerInput.split('@')[1] || '';
-    const tenantByDomain = tenants.find(t => 
-      emailDomain.includes(t.code.toLowerCase()) || 
-      emailDomain.includes(t.slug.toLowerCase()) ||
-      t.domain?.toLowerCase() === emailDomain
-    ) || DEFAULT_TENANTS.find(t => 
-      emailDomain.includes(t.code.toLowerCase()) || 
-      emailDomain.includes(t.slug.toLowerCase()) ||
-      t.domain?.toLowerCase() === emailDomain
-    );
+    if (emailDomain) {
+      const tenantByDomain = allTenantsList.find(t => 
+        t.domain?.toLowerCase() === emailDomain ||
+        (t.domain && emailDomain.endsWith(t.domain.toLowerCase()))
+      );
 
-    const targetTenant = tenantByDomain || tenants[0] || DEFAULT_TENANTS[0];
+      if (tenantByDomain) {
+        return {
+          valid: true,
+          tenant: tenantByDomain,
+          isSuperAdmin: false,
+          role: 'staff',
+          token: `${tenantByDomain.code}-SSO-AUTH`,
+          source: 'email_domain_match'
+        };
+      }
+    }
+
     return {
-      valid: true,
-      tenant: targetTenant,
-      isSuperAdmin: false,
+      valid: false,
       role: 'staff',
-      token: `${targetTenant.code}-SSO-AUTH`,
-      source: 'email_domain_match'
+      token: cleanInput,
+      source: 'unauthorized_email',
+      reason: 'This email is not authorized for any active organization. Please contact your workspace administrator.'
     };
   }
 
-  // 7. GENERIC ACCESS KEY / SYSTEM TOKEN FALLBACK (e.g. SEC-KEY-..., CORP-..., GLOBAL-..., ID-KEY-...)
-  const isGenericTokenPattern = 
-    cleanInput.startsWith('SEC-') || 
-    cleanInput.startsWith('CORP-') || 
-    cleanInput.startsWith('ORG-') || 
-    cleanInput.startsWith('KEY-') || 
-    cleanInput.startsWith('ID-') || 
-    cleanInput.startsWith('GLOBAL-') || 
-    cleanInput.startsWith('SYS-') ||
-    cleanInput.startsWith('PASS-') ||
-    cleanInput.startsWith('AUTH-') ||
-    (tokenParts.length >= 3 && cleanInput.length >= 10);
-
-  if (isGenericTokenPattern) {
-    const isMasterRole = cleanInput.includes('ADMIN') || cleanInput.includes('EXEC');
-    const isGuestRole = cleanInput.includes('GUEST') || cleanInput.includes('VISITOR');
-    const role: TenantRole = isMasterRole ? 'company_admin' : (isGuestRole ? 'guest' : 'staff');
-    const targetTenant = tenants[0] || DEFAULT_TENANTS[0];
-
-    const dynamicGenericKey: AccessKey = {
-      id: `key-generic-resolved-${Date.now()}`,
-      tenantId: targetTenant.id,
-      token: cleanInput,
-      label: `Verified ${role === 'company_admin' ? 'Administrative' : 'Workplace'} Token`,
-      role,
-      active: true,
-      maxUses: 99999,
-      usedCount: 0,
-      createdAt: Date.now(),
-      createdBy: 'System Pattern Resolution'
-    };
-
-    return {
-      valid: true,
-      key: dynamicGenericKey,
-      tenant: targetTenant,
-      isSuperAdmin: isMasterRole,
-      role,
-      token: cleanInput,
-      source: 'generic_token_pattern'
-    };
-  }
-
-  // 8. DEMO / GENERIC SHORTCUT FALLBACK (ADMIN, STAFF, DEMO, GUEST, TEST)
+  // 7. DEMO / GENERIC SHORTCUT FALLBACK (Strictly bound to first tenant ONLY for explicit single-word keywords)
   if (
-    cleanInput === 'ADMIN' || 
-    cleanInput === 'STAFF' || 
     cleanInput === 'DEMO' || 
     cleanInput === 'TEST' ||
     cleanInput === 'GUEST' ||
-    cleanInput === 'USER' ||
     cleanInput === 'LOGIN' ||
     cleanInput === 'ENTER'
   ) {
     const targetTenant = tenants[0] || DEFAULT_TENANTS[0];
-    const isAdm = cleanInput === 'ADMIN';
     const isGst = cleanInput === 'GUEST';
     return {
       valid: true,
       tenant: targetTenant,
-      isSuperAdmin: isAdm,
-      role: isAdm ? 'company_admin' : isGst ? 'guest' : 'staff',
+      isSuperAdmin: false,
+      role: isGst ? 'guest' : 'staff',
       token: `${targetTenant.code}-${cleanInput}-AUTH`,
       source: 'generic_shortcut'
     };
@@ -660,7 +626,7 @@ export function resolveAccessTokenOrPasskey(
     role: 'staff',
     token: cleanInput,
     source: 'unmatched',
-    reason: 'Invalid access token. Please verify the credentials or use the quick demo shortcuts.'
+    reason: 'Invalid access token. The token credentials do not match any authorized client organization.'
   };
 }
 

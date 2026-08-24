@@ -11,6 +11,7 @@ interface AdminAccessControlProps {
   approvedUsers: ApprovedUser[];
   accessKeys: AccessKey[];
   adminEmail: string;
+  tenants?: Tenant[];
   currentTenant?: Tenant | null;
   isMasterAdmin?: boolean;
   onSaveTenant?: (tenant: Tenant) => void;
@@ -28,6 +29,7 @@ export const AdminAccessControl: React.FC<AdminAccessControlProps> = ({
   approvedUsers,
   accessKeys,
   adminEmail,
+  tenants = [],
   currentTenant,
   isMasterAdmin = false,
   onSaveTenant,
@@ -59,6 +61,7 @@ export const AdminAccessControl: React.FC<AdminAccessControlProps> = ({
   const [bulkResult, setBulkResult] = useState<string | null>(null);
 
   // Key generator state
+  const [selectedTenantId, setSelectedTenantId] = useState<string>(currentTenant?.id || (tenants.length > 0 ? tenants[0].id : ''));
   const [keyLabel, setKeyLabel] = useState('');
   const [keyRole, setKeyRole] = useState<TenantRole>('staff');
   const [keyExpiresAt, setKeyExpiresAt] = useState('');
@@ -184,18 +187,21 @@ export const AdminAccessControl: React.FC<AdminAccessControlProps> = ({
     setIsGeneratingKey(true);
     try {
       const maxUses = keyMaxUses ? parseInt(keyMaxUses, 10) : undefined;
+      const targetTenantId = selectedTenantId || currentTenant?.id || (tenants.length > 0 ? tenants[0].id : undefined);
+      const targetTenantObj = tenants.find(t => t.id === targetTenantId) || currentTenant;
+
       const newKey = await onGenerateAccessKey({
         label: keyLabel.trim(),
         role: keyRole,
         expiresAt: keyExpiresAt || undefined,
         maxUses: isNaN(maxUses as number) ? undefined : maxUses,
-        tenantId: currentTenant?.id
+        tenantId: targetTenantId
       });
       setKeyLabel('');
       setKeyExpiresAt('');
       setKeyMaxUses('');
       setKeyRole('staff');
-      showNotice('success', `Generated new secret key token: ${newKey.token}`);
+      showNotice('success', `Generated new secret key token for ${targetTenantObj ? targetTenantObj.name : 'client'}: ${newKey.token}`);
     } catch {
       showNotice('error', 'Failed to generate token.');
     } finally {
@@ -633,6 +639,26 @@ export const AdminAccessControl: React.FC<AdminAccessControlProps> = ({
               </div>
 
               <form onSubmit={handleGenerateKeySubmit} className="space-y-3">
+                {tenants && tenants.length > 1 && (
+                  <div>
+                    <label className="block text-[10px] font-bold text-slate-500 uppercase tracking-wider mb-1 font-mono flex items-center justify-between">
+                      <span>Target Client Organization *</span>
+                      <span className="text-[10px] text-indigo-600 font-mono font-bold">Strict Tenant Binding</span>
+                    </label>
+                    <select
+                      value={selectedTenantId}
+                      onChange={(e) => setSelectedTenantId(e.target.value)}
+                      className="w-full bg-white border border-slate-200 rounded-xl px-3 py-2 text-xs text-slate-800 focus:outline-none focus:ring-2 focus:ring-indigo-500 font-bold"
+                    >
+                      {tenants.map(t => (
+                        <option key={t.id} value={t.id}>
+                          {t.name} ({t.code})
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                )}
+
                 <div>
                   <label className="block text-[10px] font-bold text-slate-500 uppercase tracking-wider mb-1 font-mono">
                     Token Label / Purpose *
@@ -642,7 +668,7 @@ export const AdminAccessControl: React.FC<AdminAccessControlProps> = ({
                     required
                     value={keyLabel}
                     onChange={(e) => setKeyLabel(e.target.value)}
-                    placeholder="e.g. Design Team Q3 or Vendor Pass"
+                    placeholder="e.g. Executive Team or Vendor Pass"
                     className="w-full bg-white border border-slate-200 rounded-xl px-3 py-2 text-xs text-slate-800 focus:outline-none focus:ring-2 focus:ring-indigo-500 font-medium"
                   />
                 </div>

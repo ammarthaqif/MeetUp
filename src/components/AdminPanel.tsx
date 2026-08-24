@@ -46,7 +46,7 @@ interface AdminPanelProps {
   onAddApprovedUser: (email: string, name?: string, department?: string) => Promise<void>;
   onBulkAddApprovedUsers: (emails: string[]) => Promise<number>;
   onRemoveApprovedUser: (userId: string) => Promise<void>;
-  onGenerateAccessKey: (data: { label: string; expiresAt?: string; maxUses?: number }) => Promise<AccessKey>;
+  onGenerateAccessKey: (data: { label: string; expiresAt?: string; maxUses?: number; role?: 'company_admin' | 'staff' | 'guest'; tenantId?: string }) => Promise<AccessKey>;
   onToggleAccessKey: (keyId: string) => Promise<void>;
   onRevokeAccessKey: (keyId: string) => Promise<void>;
   onRegenerateAccessKey?: (keyId: string, options?: { newLabel?: string; newExpiresAt?: string; resetUses?: boolean; customToken?: string; role?: any }) => Promise<AccessKey>;
@@ -1080,6 +1080,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
             approvedUsers={approvedUsers}
             accessKeys={accessKeys}
             adminEmail={adminEmail}
+            tenants={tenants}
             currentTenant={currentTenant}
             isMasterAdmin={isMasterAdmin}
             onSaveTenant={onSaveTenant}

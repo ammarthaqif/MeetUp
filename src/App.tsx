@@ -1673,13 +1673,13 @@ export default function App() {
     role?: 'company_admin' | 'staff' | 'guest'; 
     tenantId?: string;
   }): Promise<AccessKey> => {
-    const id = `key-${Date.now()}-${generateSecureToken('ID', 'KEY', 1).split('-')[2]}`;
-    const targetTenantId = data.tenantId || activeTenant?.id || 'ALL';
-    const targetTenant = tenants.find(t => t.id === targetTenantId) || DEFAULT_TENANTS.find(t => t.id === targetTenantId);
-    const prefix = targetTenant ? targetTenant.code.toUpperCase() : (activeTenant ? activeTenant.code.toUpperCase() : 'SEC');
+    const targetTenantId = data.tenantId || activeTenant?.id || (tenants.length > 0 ? tenants[0].id : 'tenant-acme');
+    const targetTenant = tenants.find(t => t.id === targetTenantId) || DEFAULT_TENANTS.find(t => t.id === targetTenantId) || tenants[0];
+    const prefix = targetTenant ? targetTenant.code.toUpperCase() : 'SEC';
     const role = data.role || 'staff';
     const roleSlug = role === 'company_admin' ? 'ADMIN' : role === 'guest' ? 'GUEST' : 'STAFF';
     const token = generateSecureToken(prefix, roleSlug);
+    const id = `key-${Date.now()}-${generateSecureToken('ID', 'KEY', 1).split('-')[2]}`;
 
     const cleanExpiresAt = (data.expiresAt && data.expiresAt.trim() !== '' && data.expiresAt.trim() !== 'never') 
       ? data.expiresAt.trim() 
@@ -1688,7 +1688,7 @@ export default function App() {
 
     const newKey: AccessKey = {
       id,
-      tenantId: targetTenantId,
+      tenantId: targetTenant ? targetTenant.id : targetTenantId,
       token,
       label: data.label,
       role,
@@ -1715,8 +1715,8 @@ export default function App() {
 
     logActivity({
       action: 'ACCESS_KEY_GENERATED',
-      details: `Generated Secret Token "${newKey.label}" (${newKey.token}) for ${targetTenant ? targetTenant.name : 'All Tenants'} [${role.toUpperCase()}]`,
-      tenantId: targetTenantId === 'ALL' ? undefined : targetTenantId
+      details: `Generated Secret Token "${newKey.label}" (${newKey.token}) for client "${targetTenant ? targetTenant.name : targetTenantId}" [${role.toUpperCase()}]`,
+      tenantId: targetTenant ? targetTenant.id : targetTenantId
     });
 
     return newKey;
