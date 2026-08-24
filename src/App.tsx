@@ -42,7 +42,8 @@ import {
   cleanAndNormalizeToken,
   cleanAlphaNumericToken,
   isTokenMatch,
-  healAndSanitizeAccessKeys
+  healAndSanitizeAccessKeys,
+  resolveAccessTokenOrPasskey
 } from './utils/security';
 import { 
   DEFAULT_TENANTS, 
@@ -1031,41 +1032,9 @@ export default function App() {
       return false;
     }
 
-    const today = new Date().toISOString().split('T')[0];
+    const resolved = resolveAccessTokenOrPasskey(cleanToken, accessKeys, tenants, offices, approvedUsers);
 
-    // Ensure access keys are sanitized with self-healing rules
-    const sanitizedKeys = healAndSanitizeAccessKeys(accessKeys, tenants);
-
-    // 1. Live keys search (timing-safe exact & normalized check)
-    let matchingKey = sanitizedKeys.find(k => k.active && isTokenMatch(cleanToken, k.token));
-    
-    // 2. Default keys fallback
-    if (!matchingKey) {
-      matchingKey = DEFAULT_TENANT_ACCESS_KEYS.find(k => k.active && isTokenMatch(cleanToken, k.token));
-    }
-
-    // 3. Dynamic tenant code check (e.g. ACME-ADMIN-*, NEXUS-*, etc.)
-    if (!matchingKey) {
-      const tenantPrefix = cleanToken.split('-')[0] || '';
-      const matchingTenant = tenants.find(t => t.code.toUpperCase() === tenantPrefix) ||
-                             DEFAULT_TENANTS.find(t => t.code.toUpperCase() === tenantPrefix);
-      if (matchingTenant) {
-        matchingKey = {
-          id: `key-${matchingTenant.code.toLowerCase()}-dynamic`,
-          tenantId: matchingTenant.id,
-          token: cleanToken,
-          label: `${matchingTenant.name} Dynamic Access Key`,
-          role: cleanToken.includes('ADMIN') ? 'company_admin' : 'staff',
-          active: true,
-          maxUses: 99999,
-          usedCount: 0,
-          createdAt: Date.now(),
-          createdBy: 'Dynamic Resolution'
-        };
-      }
-    }
-
-    if (!matchingKey) {
+    if (!resolved.valid || !resolved.tenant) {
       const penalty = recordFailedAttempt();
       if (penalty.isLocked) {
         logActivity({
@@ -1076,52 +1045,27 @@ export default function App() {
         showNotification('error', `Account locked for 2 minutes due to repeated invalid token attempts.`);
       } else if (penalty.warning) {
         showNotification('error', penalty.warning);
+      } else {
+        showNotification('error', resolved.reason || 'Invalid company access token.');
       }
       return false;
     }
-
-    // If key belongs to another tenant, switch activeTenant to that tenant so user can seamlessly proceed
-    if (activeTenant && matchingKey.tenantId !== 'ALL' && matchingKey.tenantId !== activeTenant.id) {
-      const otherTenant = tenants.find(t => t.id === matchingKey!.tenantId) ||
-                          DEFAULT_TENANTS.find(t => t.id === matchingKey!.tenantId);
-      if (otherTenant) {
-        setActiveTenant(otherTenant);
-        setTenantAccessToken(matchingKey.token);
-        showNotification('info', `Switched workspace to ${otherTenant.name} based on verified token.`);
-      }
-    }
-
-    // Check expiration (only for non-default keys)
-    const isDefault = DEFAULT_TENANT_ACCESS_KEYS.some(dk => dk.id === matchingKey!.id || isTokenMatch(dk.token, matchingKey!.token));
-    if (!isDefault && matchingKey.expiresAt && matchingKey.expiresAt < today) {
-      return false;
-    }
-
-    // Check max uses
-    if (!isDefault && matchingKey.maxUses && matchingKey.usedCount >= matchingKey.maxUses) return false;
 
     // Reset rate limiter on valid entry
     resetRateLimit();
 
-    // Increment used count
-    const updatedKey: AccessKey = { ...matchingKey, usedCount: (matchingKey.usedCount || 0) + 1 };
-    setAccessKeys(prev => {
-      const exists = prev.some(k => k.id === matchingKey!.id);
-      const updated = exists ? prev.map(k => k.id === matchingKey!.id ? updatedKey : k) : [...prev, updatedKey];
-      try {
-        localStorage.setItem('office_sync_access_keys', JSON.stringify(updated));
-      } catch {}
-      return updated;
-    });
-    try {
-      if (db) {
-        setDoc(doc(db, 'access_keys', matchingKey.id), updatedKey, { merge: true }).catch(() => {});
-      }
-    } catch {}
+    // If key belongs to another tenant or activeTenant not set, switch seamlessly
+    if (!activeTenant || (resolved.tenant.id !== activeTenant.id && !resolved.isSuperAdmin)) {
+      setActiveTenant(resolved.tenant);
+      setTenantAccessToken(resolved.token);
+      showNotification('info', `Switched workspace to ${resolved.tenant.name} based on verified token.`);
+    } else {
+      setTenantAccessToken(resolved.token);
+    }
 
     // Add to verified tokens
     setVerifiedTokens(prev => {
-      const updated = Array.from(new Set([...prev, matchingKey!.token]));
+      const updated = Array.from(new Set([...prev, resolved.token]));
       try {
         localStorage.setItem('office_sync_verified_tokens', JSON.stringify(updated));
       } catch {}
@@ -1130,10 +1074,10 @@ export default function App() {
 
     logActivity({
       action: 'TOKEN_ACCESS_GRANTED',
-      details: `Secret Access Token "${matchingKey.label}" (${matchingKey.token}) verified for room booking permissions.`,
+      details: `Secret Access Token "${resolved.key?.label || resolved.token}" verified for room booking permissions.`,
     });
 
-    showNotification('success', `Access token verified! Booking unlocked for ${matchingKey.label}.`);
+    showNotification('success', `Access token verified! Booking unlocked for ${resolved.tenant.name}.`);
     
     // Close auth modal and open pending booking modal
     setIsAuthModalOpen(false);

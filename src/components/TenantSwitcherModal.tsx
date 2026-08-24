@@ -21,7 +21,8 @@ import {
   resetRateLimit,
   cleanAndNormalizeToken,
   isTokenMatch,
-  healAndSanitizeAccessKeys
+  healAndSanitizeAccessKeys,
+  resolveAccessTokenOrPasskey
 } from '../utils/security';
 
 interface TenantSwitcherModalProps {
@@ -62,16 +63,7 @@ export const TenantSwitcherModal: React.FC<TenantSwitcherModalProps> = ({
       return;
     }
 
-    if (cleanInput === 'MASTER-PLATFORM-ADMIN-2026' || cleanInput === 'MASTER-ADMIN-2026' || cleanInput === 'SUPERADMIN-AUTH') {
-      const defaultTenant = tenants[0] || DEFAULT_TENANTS[0];
-      if (defaultTenant) onSwitchTenant(defaultTenant, cleanInput);
-      onClose();
-      return;
-    }
-
-    const today = new Date().toISOString().split('T')[0];
-
-    // Read fresh keys and sanitize
+    // Read fresh keys from state and localStorage
     let rawKeys: AccessKey[] = accessKeys;
     try {
       const saved = localStorage.getItem('office_sync_access_keys');
@@ -83,45 +75,16 @@ export const TenantSwitcherModal: React.FC<TenantSwitcherModalProps> = ({
       }
     } catch {}
 
-    const liveKeys = healAndSanitizeAccessKeys(rawKeys, tenants);
+    const resolved = resolveAccessTokenOrPasskey(cleanInput, rawKeys, tenants);
 
-    // 1. Resilient match across live sanitized keys
-    let matchedKey = liveKeys.find(k => isTokenMatch(cleanInput, k.token));
-
-    // 2. Fallback in default access keys
-    if (!matchedKey) {
-      matchedKey = DEFAULT_TENANT_ACCESS_KEYS.find(k => isTokenMatch(cleanInput, k.token));
-    }
-
-    // 3. Dynamic tenant code matching (e.g. ACME-ADMIN-*, NEXUS-*, etc.)
-    if (!matchedKey) {
-      const tenantPrefix = cleanInput.split('-')[0] || '';
-      const matchingTenant = tenants.find(t => t.code.toUpperCase() === tenantPrefix) ||
-                             DEFAULT_TENANTS.find(t => t.code.toUpperCase() === tenantPrefix);
-      if (matchingTenant) {
-        matchedKey = {
-          id: `key-${matchingTenant.code.toLowerCase()}-dynamic`,
-          tenantId: matchingTenant.id,
-          token: cleanInput,
-          label: `${matchingTenant.name} Access Key`,
-          role: cleanInput.includes('ADMIN') ? 'company_admin' : 'staff',
-          active: true,
-          maxUses: 99999,
-          usedCount: 0,
-          createdAt: Date.now(),
-          createdBy: 'Dynamic Resolution'
-        };
-      }
-    }
-
-    if (!matchedKey) {
+    if (!resolved.valid || !resolved.tenant) {
       const penalty = recordFailedAttempt();
       if (penalty.isLocked) {
         setErrorMsg(`Security Lockout: Too many invalid attempts. Try again in ${penalty.remainingLockoutSeconds}s.`);
       } else if (penalty.warning) {
         setErrorMsg(penalty.warning);
       } else {
-        setErrorMsg('Invalid company access token. Please verify with your workspace administrator.');
+        setErrorMsg(resolved.reason || 'Invalid company access token. Please verify with your workspace administrator.');
       }
       return;
     }
@@ -129,35 +92,8 @@ export const TenantSwitcherModal: React.FC<TenantSwitcherModalProps> = ({
     // Valid token
     resetRateLimit();
 
-    if (!matchedKey.active) {
-      setErrorMsg('This company access token has been deactivated.');
-      return;
-    }
-
-    if (matchedKey.expiresAt && matchedKey.expiresAt < today) {
-      setErrorMsg(`This company access token expired on ${matchedKey.expiresAt}.`);
-      return;
-    }
-
-    if (matchedKey.maxUses && matchedKey.usedCount >= matchedKey.maxUses) {
-      setErrorMsg('This company access token has reached its maximum utilization limit.');
-      return;
-    }
-
-    const targetTenant = 
-      tenants.find(t => t.id === matchedKey!.tenantId && t.active) ||
-      tenants.find(t => t.id === matchedKey!.tenantId) ||
-      DEFAULT_TENANTS.find(t => t.id === matchedKey!.tenantId) ||
-      tenants.find(t => t.code.toUpperCase() === matchedKey!.token.split('-')[0]?.toUpperCase()) ||
-      DEFAULT_TENANTS.find(t => t.code.toUpperCase() === matchedKey!.token.split('-')[0]?.toUpperCase()) ||
-      tenants[0];
-
-    if (!targetTenant) {
-      setErrorMsg('Tenant organization not found or disabled.');
-      return;
-    }
-
-    onSwitchTenant(targetTenant, matchedKey.token);
+    const targetTenant = resolved.tenant;
+    onSwitchTenant(targetTenant, resolved.token);
     onClose();
   };
 

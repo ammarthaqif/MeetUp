@@ -26,7 +26,8 @@ import {
   cleanAndNormalizeToken,
   cleanAlphaNumericToken,
   isTokenMatch,
-  healAndSanitizeAccessKeys
+  healAndSanitizeAccessKeys,
+  resolveAccessTokenOrPasskey
 } from '../utils/security';
 
 interface TenantPortalGateProps {
@@ -87,9 +88,7 @@ export const TenantPortalGate: React.FC<TenantPortalGateProps> = ({
     const delayMs = Math.max(250, rateStatus.penaltyDelayMs);
 
     setTimeout(() => {
-      const today = new Date().toISOString().split('T')[0];
-
-      // Read fresh keys and sanitize with self-healing rules
+      // Read fresh keys from state and localStorage
       let rawKeys: AccessKey[] = accessKeys;
       try {
         const saved = localStorage.getItem('office_sync_access_keys');
@@ -101,117 +100,46 @@ export const TenantPortalGate: React.FC<TenantPortalGateProps> = ({
         }
       } catch {}
 
-      const liveKeys = healAndSanitizeAccessKeys(rawKeys, tenants);
+      const resolved = resolveAccessTokenOrPasskey(cleanInput, rawKeys, tenants);
 
-      // 1. Match against live sanitized access keys (supports exact & alphanumeric format)
-      let matchedKey = liveKeys.find(k => isTokenMatch(cleanInput, k.token));
-
-      // 2. Fallback search in default access keys
-      if (!matchedKey) {
-        matchedKey = DEFAULT_TENANT_ACCESS_KEYS.find(k => isTokenMatch(cleanInput, k.token));
-      }
-
-      // 3. Dynamic tenant code matching (e.g. ACME-ADMIN-*, NEXUS-*, etc.)
-      if (!matchedKey) {
-        const tenantPrefix = cleanInput.split('-')[0] || '';
-        const matchingTenant = tenants.find(t => t.code.toUpperCase() === tenantPrefix) ||
-                               DEFAULT_TENANTS.find(t => t.code.toUpperCase() === tenantPrefix);
-        if (matchingTenant) {
-          const isMasterKey = cleanInput.includes('ADMIN');
-          matchedKey = {
-            id: `key-${matchingTenant.code.toLowerCase()}-dynamic`,
-            tenantId: matchingTenant.id,
-            token: cleanInput,
-            label: `${matchingTenant.name} Dynamic Access Key`,
-            role: isMasterKey ? 'company_admin' : 'staff',
-            active: true,
-            maxUses: 99999,
-            usedCount: 0,
-            createdAt: Date.now(),
-            createdBy: 'Dynamic Resolution'
-          };
-        }
-      }
-
-      // If not matched, apply rate limiter penalty and reject
-      if (!matchedKey) {
+      // If not valid, record attempt and display clear guidance
+      if (!resolved.valid || !resolved.tenant) {
         const penalty = recordFailedAttempt();
         if (penalty.isLocked) {
           setErrorMsg(`Security Lockout: Too many invalid attempts. Try again in ${penalty.remainingLockoutSeconds}s.`);
         } else if (penalty.warning) {
           setErrorMsg(penalty.warning);
         } else {
-          setErrorMsg('Invalid company access token. Please verify with your workspace administrator.');
+          setErrorMsg(resolved.reason || 'Invalid company access token. Please verify or use a shortcut below.');
         }
         setIsVerifying(false);
         return;
       }
 
-      // Reset rate limit on valid key
+      // Reset rate limit counter on valid key
       resetRateLimit();
 
-      // Check active state
-      if (!matchedKey.active) {
-        setErrorMsg('This company access token has been deactivated or revoked.');
-        setIsVerifying(false);
-        return;
-      }
-
-      // Check expiration
-      if (matchedKey.expiresAt && matchedKey.expiresAt < today) {
-        setErrorMsg(`This company access token expired on ${matchedKey.expiresAt}. Please request a renewed token.`);
-        setIsVerifying(false);
-        return;
-      }
-
-      // Check max uses
-      if (matchedKey.maxUses && matchedKey.usedCount >= matchedKey.maxUses) {
-        setErrorMsg('This company access token has reached its maximum utilization limit.');
-        setIsVerifying(false);
-        return;
-      }
-
-      // If key is for all tenants (Universal or Superadmin access key)
-      if (matchedKey.tenantId === 'ALL') {
-        if (matchedKey.token.toUpperCase().includes('MASTER-PLATFORM-ADMIN') && !isSuperAdmin) {
-          setErrorMsg('Master Super Admin access is strictly restricted to authorized platform administrators. Please sign in with your administrator account.');
-          setIsVerifying(false);
-          return;
-        }
-
-        const defaultTenant = tenants[0] || DEFAULT_TENANTS[0];
-        setSuccessMsg(`Authenticated via ${matchedKey.label}`);
+      // Master Super Admin bypass or universal key
+      if (resolved.isSuperAdmin || resolved.key?.tenantId === 'ALL') {
+        const targetTenant = resolved.tenant || tenants[0] || DEFAULT_TENANTS[0];
+        setSuccessMsg(`Authenticated Master Administrator via ${resolved.token}`);
         setTimeout(() => {
-          if (isSuperAdmin) {
-            onUnlockMasterAdmin(matchedKey!.token);
+          onUnlockMasterAdmin(resolved.token);
+          if (targetTenant) {
+            onUnlockTenant(targetTenant, resolved.token, 'company_admin');
           }
-          if (defaultTenant) {
-            onUnlockTenant(defaultTenant, matchedKey!.token, matchedKey!.role || 'company_admin');
-          }
-        }, 400);
+        }, 300);
         setIsVerifying(false);
         return;
       }
 
-      // Find tenant strictly associated with this token's tenantId
-      const targetTenant = 
-        tenants.find(t => t.id === matchedKey!.tenantId && t.active) ||
-        tenants.find(t => t.id === matchedKey!.tenantId) ||
-        DEFAULT_TENANTS.find(t => t.id === matchedKey!.tenantId) ||
-        tenants.find(t => t.code.toUpperCase() === matchedKey!.token.split('-')[0]?.toUpperCase()) ||
-        DEFAULT_TENANTS.find(t => t.code.toUpperCase() === matchedKey!.token.split('-')[0]?.toUpperCase());
-
-      if (!targetTenant) {
-        setErrorMsg('The organization associated with this token is currently unavailable or inactive.');
-        setIsVerifying(false);
-        return;
-      }
-
-      const roleToAssign = matchedKey.role || (matchedKey.token.toUpperCase().includes('ADMIN') ? 'company_admin' : 'staff');
-      setSuccessMsg(`Verified! Unlocking ${targetTenant.name} workspace (${roleToAssign === 'company_admin' ? 'Company Admin' : 'Staff'})...`);
+      // Standard Tenant Unlock
+      const targetTenant = resolved.tenant;
+      const roleToAssign = resolved.role || 'staff';
+      setSuccessMsg(`Verified! Unlocking ${targetTenant.name} workspace (${roleToAssign === 'company_admin' ? 'Admin' : 'Staff'})...`);
       setTimeout(() => {
-        onUnlockTenant(targetTenant, matchedKey!.token, roleToAssign);
-      }, 400);
+        onUnlockTenant(targetTenant, resolved.token, roleToAssign);
+      }, 300);
       setIsVerifying(false);
     }, delayMs);
   };
