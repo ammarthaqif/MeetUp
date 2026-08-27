@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { 
   collection, onSnapshot, addDoc, doc, setDoc, deleteDoc
@@ -298,16 +298,41 @@ export default function App() {
     email => email.trim().toLowerCase() === user.email?.trim().toLowerCase()
   );
 
-  const isTokenCompanyAdmin = !!tenantAccessToken && (
-    tenantAccessToken.toUpperCase().includes('-ADMIN-') ||
-    tenantAccessToken.toUpperCase().includes('ADMIN') ||
-    accessKeys.some(
-      k => isTokenMatch(tenantAccessToken, k.token) && k.active && k.role === 'company_admin'
-    ) ||
-    DEFAULT_TENANT_ACCESS_KEYS.some(
-      k => isTokenMatch(tenantAccessToken, k.token) && k.role === 'company_admin'
-    )
-  );
+  const isTokenCompanyAdmin = useMemo(() => {
+    if (!tenantAccessToken || !activeTenant) return false;
+    const cleanCurrent = cleanAndNormalizeToken(tenantAccessToken);
+    
+    // 1. Universal Super Admin bypass tokens
+    if (
+      cleanCurrent === 'SUPERADMIN-AUTH' ||
+      cleanCurrent === 'MASTER-PLATFORM-ADMIN-2026' ||
+      cleanCurrent === 'ADMIN-UNIVERSAL-2026' ||
+      cleanCurrent === 'MASTER-ADMIN-2026'
+    ) {
+      return true;
+    }
+
+    // 2. Check matched keys in stored accessKeys and DEFAULT_TENANT_ACCESS_KEYS strictly for activeTenant
+    const allKeysList = [...accessKeys, ...DEFAULT_TENANT_ACCESS_KEYS];
+    const matchingKey = allKeysList.find(
+      k => isTokenMatch(cleanCurrent, k.token) && (k.tenantId === activeTenant.id || k.tenantId === 'ALL')
+    );
+    if (matchingKey) {
+      return matchingKey.active !== false && matchingKey.role === 'company_admin';
+    }
+
+    // 3. Dynamic tenant prefix check strictly matching activeTenant's code
+    const tenantPrefix = activeTenant.code.toUpperCase();
+    if (
+      (cleanCurrent.startsWith(`${tenantPrefix}-ADMIN`) || cleanCurrent.startsWith(`${tenantPrefix}-EXEC`)) &&
+      !cleanCurrent.includes('STAFF') &&
+      !cleanCurrent.includes('GUEST')
+    ) {
+      return true;
+    }
+
+    return false;
+  }, [tenantAccessToken, activeTenant, accessKeys]);
 
   // Synchronize local states to localStorage for instant offline access
   useEffect(() => {

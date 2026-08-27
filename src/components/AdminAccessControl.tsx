@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { 
   ShieldCheck, Key, UserPlus, Users, Trash2, Copy, Check, 
   Plus, Search, AlertCircle, RefreshCw, UploadCloud, Lock, CheckCircle2,
@@ -62,6 +62,12 @@ export const AdminAccessControl: React.FC<AdminAccessControlProps> = ({
 
   // Key generator state
   const [selectedTenantId, setSelectedTenantId] = useState<string>(currentTenant?.id || (tenants.length > 0 ? tenants[0].id : ''));
+
+  useEffect(() => {
+    if (currentTenant?.id) {
+      setSelectedTenantId(currentTenant.id);
+    }
+  }, [currentTenant?.id]);
   const [keyLabel, setKeyLabel] = useState('');
   const [keyRole, setKeyRole] = useState<TenantRole>('staff');
   const [keyExpiresAt, setKeyExpiresAt] = useState('');
@@ -187,7 +193,7 @@ export const AdminAccessControl: React.FC<AdminAccessControlProps> = ({
     setIsGeneratingKey(true);
     try {
       const maxUses = keyMaxUses ? parseInt(keyMaxUses, 10) : undefined;
-      const targetTenantId = selectedTenantId || currentTenant?.id || (tenants.length > 0 ? tenants[0].id : undefined);
+      const targetTenantId = isMasterAdmin ? (selectedTenantId || currentTenant?.id || (tenants.length > 0 ? tenants[0].id : undefined)) : (currentTenant?.id || selectedTenantId);
       const targetTenantObj = tenants.find(t => t.id === targetTenantId) || currentTenant;
 
       const newKey = await onGenerateAccessKey({
