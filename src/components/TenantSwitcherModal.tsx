@@ -63,18 +63,30 @@ export const TenantSwitcherModal: React.FC<TenantSwitcherModalProps> = ({
       return;
     }
 
-    // Read fresh keys from state and localStorage
-    let rawKeys: AccessKey[] = accessKeys;
+    // Read fresh keys from defaults, state, and localStorage
+    const keyMap = new Map<string, AccessKey>();
+    DEFAULT_TENANT_ACCESS_KEYS.forEach(k => {
+      keyMap.set(k.id, k);
+      keyMap.set(`tok-${k.token.toUpperCase()}`, k);
+    });
+    accessKeys.forEach(k => {
+      if (k && k.id) keyMap.set(k.id, k);
+      if (k && k.token) keyMap.set(`tok-${k.token.toUpperCase()}`, k);
+    });
     try {
       const saved = localStorage.getItem('office_sync_access_keys');
       if (saved) {
         const parsed = JSON.parse(saved);
-        if (Array.isArray(parsed) && parsed.length > 0) {
-          rawKeys = parsed;
+        if (Array.isArray(parsed)) {
+          parsed.forEach(k => {
+            if (k && k.id) keyMap.set(k.id, k);
+            if (k && k.token) keyMap.set(`tok-${k.token.toUpperCase()}`, k);
+          });
         }
       }
     } catch {}
 
+    const rawKeys: AccessKey[] = Array.from(keyMap.values());
     const resolved = resolveAccessTokenOrPasskey(cleanInput, rawKeys, tenants);
 
     if (!resolved.valid || !resolved.tenant) {

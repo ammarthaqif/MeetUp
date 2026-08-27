@@ -100,8 +100,14 @@ export const TenantPortalGate: React.FC<TenantPortalGateProps> = ({
     setTimeout(() => {
       // Merge fresh keys from props and localStorage
       const keyMap = new Map<string, AccessKey>();
-      DEFAULT_TENANT_ACCESS_KEYS.forEach(k => keyMap.set(k.id, k));
-      accessKeys.forEach(k => keyMap.set(k.id, k));
+      DEFAULT_TENANT_ACCESS_KEYS.forEach(k => {
+        if (k && k.id) keyMap.set(k.id, k);
+        if (k && k.token) keyMap.set(`tok-${cleanAndNormalizeToken(k.token)}`, k);
+      });
+      accessKeys.forEach(k => {
+        if (k && k.id) keyMap.set(k.id, k);
+        if (k && k.token) keyMap.set(`tok-${cleanAndNormalizeToken(k.token)}`, k);
+      });
       
       try {
         const saved = localStorage.getItem('office_sync_access_keys');
@@ -110,6 +116,7 @@ export const TenantPortalGate: React.FC<TenantPortalGateProps> = ({
           if (Array.isArray(parsed)) {
             parsed.forEach(k => {
               if (k && k.id) keyMap.set(k.id, k);
+              if (k && k.token) keyMap.set(`tok-${cleanAndNormalizeToken(k.token)}`, k);
             });
           }
         }
