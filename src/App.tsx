@@ -92,6 +92,11 @@ const DEFAULT_AUDIT_LOGS: AuditLog[] = [
   }
 ];
 
+// Unique Client Tab ID to prevent self-broadcasting loops in multi-window environments
+const CLIENT_TAB_ID = typeof crypto !== 'undefined' && crypto.randomUUID 
+  ? crypto.randomUUID() 
+  : `tab-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+
 export default function App() {
   const [selectedDate, setSelectedDate] = useState<string>(() => {
     const today = new Date();
@@ -115,17 +120,18 @@ export default function App() {
   const [activeTenant, setActiveTenant] = useState<Tenant | null>(() => {
     try {
       const saved = localStorage.getItem('office_sync_active_tenant');
-      return saved ? JSON.parse(saved) : null;
+      if (saved === 'null' || saved === 'LOCKED') return null;
+      return saved ? JSON.parse(saved) : DEFAULT_TENANTS[0];
     } catch {
-      return null;
+      return DEFAULT_TENANTS[0];
     }
   });
 
   const [tenantAccessToken, setTenantAccessToken] = useState<string>(() => {
     try {
-      return localStorage.getItem('office_sync_tenant_token') || '';
+      return localStorage.getItem('office_sync_tenant_token') || 'ACME-CORP-2025';
     } catch {
-      return '';
+      return 'ACME-CORP-2025';
     }
   });
 
@@ -229,9 +235,10 @@ export default function App() {
   const [activeOffice, setActiveOffice] = useState<Office | null>(() => {
     try {
       const saved = localStorage.getItem('office_sync_active_office');
-      return saved ? JSON.parse(saved) : null;
+      if (saved) return JSON.parse(saved);
+      return DEFAULT_MULTI_TENANT_OFFICES[0];
     } catch {
-      return null;
+      return DEFAULT_MULTI_TENANT_OFFICES[0];
     }
   });
 
@@ -358,80 +365,63 @@ export default function App() {
     } catch {}
   }, [tenantAccessToken]);
 
+  // Safe helper to broadcast updates across windows/tabs
+  const broadcastSync = (type: string, payload: any) => {
+    try {
+      if (typeof BroadcastChannel !== 'undefined') {
+        const channel = new BroadcastChannel('office_sync_channel');
+        channel.postMessage({ type, payload, senderTabId: CLIENT_TAB_ID });
+        channel.close();
+      }
+    } catch {}
+  };
+
   useEffect(() => {
     try {
       localStorage.setItem('office_sync_offices', JSON.stringify(offices));
-      if (typeof BroadcastChannel !== 'undefined') {
-        const channel = new BroadcastChannel('office_sync_channel');
-        channel.postMessage({ type: 'SYNC_OFFICES', payload: offices });
-        channel.close();
-      }
+      broadcastSync('SYNC_OFFICES', offices);
     } catch {}
   }, [offices]);
 
   useEffect(() => {
     try {
       localStorage.setItem('office_sync_rooms', JSON.stringify(rooms));
-      if (typeof BroadcastChannel !== 'undefined') {
-        const channel = new BroadcastChannel('office_sync_channel');
-        channel.postMessage({ type: 'SYNC_ROOMS', payload: rooms });
-        channel.close();
-      }
+      broadcastSync('SYNC_ROOMS', rooms);
     } catch {}
   }, [rooms]);
 
   useEffect(() => {
     try {
       localStorage.setItem('office_sync_bookings', JSON.stringify(bookings));
-      if (typeof BroadcastChannel !== 'undefined') {
-        const channel = new BroadcastChannel('office_sync_channel');
-        channel.postMessage({ type: 'SYNC_BOOKINGS', payload: bookings });
-        channel.close();
-      }
+      broadcastSync('SYNC_BOOKINGS', bookings);
     } catch {}
   }, [bookings]);
 
   useEffect(() => {
     try {
       localStorage.setItem('office_sync_approved_users', JSON.stringify(approvedUsers));
-      if (typeof BroadcastChannel !== 'undefined') {
-        const channel = new BroadcastChannel('office_sync_channel');
-        channel.postMessage({ type: 'SYNC_USERS', payload: approvedUsers });
-        channel.close();
-      }
+      broadcastSync('SYNC_USERS', approvedUsers);
     } catch {}
   }, [approvedUsers]);
 
   useEffect(() => {
     try {
       localStorage.setItem('office_sync_access_keys', JSON.stringify(accessKeys));
-      if (typeof BroadcastChannel !== 'undefined') {
-        const channel = new BroadcastChannel('office_sync_channel');
-        channel.postMessage({ type: 'SYNC_KEYS', payload: accessKeys });
-        channel.close();
-      }
+      broadcastSync('SYNC_KEYS', accessKeys);
     } catch {}
   }, [accessKeys]);
 
   useEffect(() => {
     try {
       localStorage.setItem('office_sync_audit_logs', JSON.stringify(auditLogs));
-      if (typeof BroadcastChannel !== 'undefined') {
-        const channel = new BroadcastChannel('office_sync_channel');
-        channel.postMessage({ type: 'SYNC_AUDIT_LOGS', payload: auditLogs });
-        channel.close();
-      }
+      broadcastSync('SYNC_AUDIT_LOGS', auditLogs);
     } catch {}
   }, [auditLogs]);
 
   useEffect(() => {
     try {
       localStorage.setItem('office_sync_emails', JSON.stringify(simulatedEmails));
-      if (typeof BroadcastChannel !== 'undefined') {
-        const channel = new BroadcastChannel('office_sync_channel');
-        channel.postMessage({ type: 'SYNC_EMAILS', payload: simulatedEmails });
-        channel.close();
-      }
+      broadcastSync('SYNC_EMAILS', simulatedEmails);
     } catch {}
   }, [simulatedEmails]);
 
@@ -442,7 +432,7 @@ export default function App() {
       if (typeof BroadcastChannel !== 'undefined') {
         channel = new BroadcastChannel('office_sync_channel');
         channel.onmessage = (event) => {
-          if (!event.data) return;
+          if (!event.data || event.data.senderTabId === CLIENT_TAB_ID) return;
           const { type, payload } = event.data;
           if (type === 'SYNC_BOOKINGS' && Array.isArray(payload)) {
             setBookings(payload);
@@ -466,7 +456,7 @@ export default function App() {
     } catch {}
 
     const handleStorage = (e: StorageEvent) => {
-      if (!e.newValue) return;
+      if (!e.newValue || !e.key) return;
       try {
         if (e.key === 'office_sync_bookings') {
           const parsed = JSON.parse(e.newValue);
