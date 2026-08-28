@@ -1703,8 +1703,8 @@ export default function App() {
     tenantId?: string;
   }): Promise<AccessKey> => {
     const targetTenantId = data.tenantId || activeTenant?.id || (tenants.length > 0 ? tenants[0].id : 'tenant-acme');
-    const targetTenant = tenants.find(t => t.id === targetTenantId) || DEFAULT_TENANTS.find(t => t.id === targetTenantId) || tenants[0];
-    const prefix = targetTenant ? targetTenant.code.toUpperCase() : 'SEC';
+    const targetTenant = tenants.find(t => t.id === targetTenantId) || DEFAULT_TENANTS.find(t => t.id === targetTenantId) || tenants[0] || DEFAULT_TENANTS[0];
+    const prefix = targetTenant ? targetTenant.code.toUpperCase() : 'ACME';
     const role = data.role || 'staff';
     const roleSlug = role === 'company_admin' ? 'ADMIN' : role === 'guest' ? 'GUEST' : 'STAFF';
     const token = generateSecureToken(prefix, roleSlug);
@@ -1818,8 +1818,8 @@ export default function App() {
     const target = accessKeys.find(k => k.id === keyId) || DEFAULT_TENANT_ACCESS_KEYS.find(k => k.id === keyId);
     if (!target) throw new Error('Target access token not found');
 
-    const tenant = tenants.find(t => t.id === target.tenantId) || DEFAULT_TENANTS.find(t => t.id === target.tenantId);
-    const prefix = tenant ? tenant.code : 'SEC';
+    const tenant = tenants.find(t => t.id === target.tenantId) || DEFAULT_TENANTS.find(t => t.id === target.tenantId) || tenants[0] || DEFAULT_TENANTS[0];
+    const prefix = tenant ? tenant.code.toUpperCase() : 'ACME';
     const role = options?.role || target.role || 'staff';
     const roleSlug = role === 'company_admin' ? 'ADMIN' : role === 'guest' ? 'GUEST' : 'STAFF';
 
