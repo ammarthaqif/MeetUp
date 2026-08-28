@@ -3,8 +3,7 @@ import { getAuth, signInWithPopup, GoogleAuthProvider, onAuthStateChanged, User,
 import { 
   initializeFirestore, 
   getFirestore, 
-  persistentLocalCache, 
-  persistentMultipleTabManager,
+  memoryLocalCache,
   setLogLevel,
   Firestore 
 } from 'firebase/firestore';
@@ -55,15 +54,12 @@ try {
   if (app) {
     authInstance = getAuth(app);
     try {
-      // Use long-polling with multi-tab persistent cache for maximum stability in preview/iframe sandboxes
+      // Use memoryLocalCache for zero tab-lock delays and instant startup in preview environments
       dbInstance = initializeFirestore(app, {
-        experimentalForceLongPolling: true,
-        localCache: persistentLocalCache({
-          tabManager: persistentMultipleTabManager()
-        })
+        localCache: memoryLocalCache()
       });
     } catch {
-      // Graceful fallback to default instance
+      // Graceful fallback to standard instance
       dbInstance = getFirestore(app);
     }
   }

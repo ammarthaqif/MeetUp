@@ -95,7 +95,7 @@ export const TenantPortalGate: React.FC<TenantPortalGateProps> = ({
     setErrorMsg(null);
     setSuccessMsg(null);
 
-    const delayMs = tokenToVerify ? 100 : Math.min(250, rateStatus.penaltyDelayMs);
+    const delayMs = tokenToVerify ? 20 : Math.min(80, rateStatus.penaltyDelayMs);
 
     setTimeout(() => {
       // Merge fresh keys from props and localStorage
@@ -146,24 +146,20 @@ export const TenantPortalGate: React.FC<TenantPortalGateProps> = ({
       if (resolved.isSuperAdmin || resolved.key?.tenantId === 'ALL') {
         const targetTenant = resolved.tenant || tenants[0] || DEFAULT_TENANTS[0];
         setSuccessMsg(`Authenticated Master Administrator via ${resolved.token}`);
-        setTimeout(() => {
-          onUnlockMasterAdmin(resolved.token);
-          if (targetTenant) {
-            onUnlockTenant(targetTenant, resolved.token, 'company_admin');
-          }
-        }, 200);
         setIsVerifying(false);
+        onUnlockMasterAdmin(resolved.token);
+        if (targetTenant) {
+          onUnlockTenant(targetTenant, resolved.token, 'company_admin');
+        }
         return;
       }
 
       // Standard Tenant Unlock
       const targetTenant = resolved.tenant;
       const roleToAssign = resolved.role || 'staff';
-      setSuccessMsg(`Verified! Unlocking ${targetTenant.name} workspace (${roleToAssign === 'company_admin' ? 'Admin' : 'Staff'})...`);
-      setTimeout(() => {
-        onUnlockTenant(targetTenant, resolved.token, roleToAssign);
-      }, 200);
+      setSuccessMsg(`Verified! Unlocking ${targetTenant.name} workspace...`);
       setIsVerifying(false);
+      onUnlockTenant(targetTenant, resolved.token, roleToAssign);
     }, delayMs);
   };
 

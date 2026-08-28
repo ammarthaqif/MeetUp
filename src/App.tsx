@@ -174,12 +174,9 @@ export default function App() {
     try {
       const saved = localStorage.getItem('office_sync_access_keys');
       const parsed: AccessKey[] = saved ? JSON.parse(saved) : DEFAULT_TENANT_ACCESS_KEYS;
-      const sanitized = healAndSanitizeAccessKeys(parsed, DEFAULT_TENANTS);
-      localStorage.setItem('office_sync_access_keys', JSON.stringify(sanitized));
-      return sanitized;
+      return healAndSanitizeAccessKeys(parsed, DEFAULT_TENANTS);
     } catch {
-      const sanitized = healAndSanitizeAccessKeys(DEFAULT_TENANT_ACCESS_KEYS, DEFAULT_TENANTS);
-      return sanitized;
+      return healAndSanitizeAccessKeys(DEFAULT_TENANT_ACCESS_KEYS, DEFAULT_TENANTS);
     }
   });
 
