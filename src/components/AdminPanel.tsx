@@ -606,7 +606,8 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                 {offices.map(office => {
                   const officeRooms = rooms.filter(r => r.officeId === office.id);
-                  const officeBookings = bookings.filter(b => b.officeId === office.id);
+                  const officeRoomIds = new Set(officeRooms.map(r => r.id));
+                  const officeBookings = bookings.filter(b => b.officeId === office.id || (b.roomId && officeRoomIds.has(b.roomId)));
                   return (
                     <div 
                       key={office.id}

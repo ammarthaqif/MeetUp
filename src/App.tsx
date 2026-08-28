@@ -361,44 +361,147 @@ export default function App() {
   useEffect(() => {
     try {
       localStorage.setItem('office_sync_offices', JSON.stringify(offices));
+      if (typeof BroadcastChannel !== 'undefined') {
+        const channel = new BroadcastChannel('office_sync_channel');
+        channel.postMessage({ type: 'SYNC_OFFICES', payload: offices });
+        channel.close();
+      }
     } catch {}
   }, [offices]);
 
   useEffect(() => {
     try {
       localStorage.setItem('office_sync_rooms', JSON.stringify(rooms));
+      if (typeof BroadcastChannel !== 'undefined') {
+        const channel = new BroadcastChannel('office_sync_channel');
+        channel.postMessage({ type: 'SYNC_ROOMS', payload: rooms });
+        channel.close();
+      }
     } catch {}
   }, [rooms]);
 
   useEffect(() => {
     try {
       localStorage.setItem('office_sync_bookings', JSON.stringify(bookings));
+      if (typeof BroadcastChannel !== 'undefined') {
+        const channel = new BroadcastChannel('office_sync_channel');
+        channel.postMessage({ type: 'SYNC_BOOKINGS', payload: bookings });
+        channel.close();
+      }
     } catch {}
   }, [bookings]);
 
   useEffect(() => {
     try {
       localStorage.setItem('office_sync_approved_users', JSON.stringify(approvedUsers));
+      if (typeof BroadcastChannel !== 'undefined') {
+        const channel = new BroadcastChannel('office_sync_channel');
+        channel.postMessage({ type: 'SYNC_USERS', payload: approvedUsers });
+        channel.close();
+      }
     } catch {}
   }, [approvedUsers]);
 
   useEffect(() => {
     try {
       localStorage.setItem('office_sync_access_keys', JSON.stringify(accessKeys));
+      if (typeof BroadcastChannel !== 'undefined') {
+        const channel = new BroadcastChannel('office_sync_channel');
+        channel.postMessage({ type: 'SYNC_KEYS', payload: accessKeys });
+        channel.close();
+      }
     } catch {}
   }, [accessKeys]);
 
   useEffect(() => {
     try {
       localStorage.setItem('office_sync_audit_logs', JSON.stringify(auditLogs));
+      if (typeof BroadcastChannel !== 'undefined') {
+        const channel = new BroadcastChannel('office_sync_channel');
+        channel.postMessage({ type: 'SYNC_AUDIT_LOGS', payload: auditLogs });
+        channel.close();
+      }
     } catch {}
   }, [auditLogs]);
 
   useEffect(() => {
     try {
       localStorage.setItem('office_sync_emails', JSON.stringify(simulatedEmails));
+      if (typeof BroadcastChannel !== 'undefined') {
+        const channel = new BroadcastChannel('office_sync_channel');
+        channel.postMessage({ type: 'SYNC_EMAILS', payload: simulatedEmails });
+        channel.close();
+      }
     } catch {}
   }, [simulatedEmails]);
+
+  // Real-Time Cross-Tab / Cross-Window Listener for multi-staff sync
+  useEffect(() => {
+    let channel: BroadcastChannel | null = null;
+    try {
+      if (typeof BroadcastChannel !== 'undefined') {
+        channel = new BroadcastChannel('office_sync_channel');
+        channel.onmessage = (event) => {
+          if (!event.data) return;
+          const { type, payload } = event.data;
+          if (type === 'SYNC_BOOKINGS' && Array.isArray(payload)) {
+            setBookings(payload);
+          } else if (type === 'SYNC_OFFICES' && Array.isArray(payload)) {
+            setOffices(payload);
+          } else if (type === 'SYNC_ROOMS' && Array.isArray(payload)) {
+            setRooms(payload);
+          } else if (type === 'SYNC_USERS' && Array.isArray(payload)) {
+            setApprovedUsers(payload);
+          } else if (type === 'SYNC_KEYS' && Array.isArray(payload)) {
+            setAccessKeys(payload);
+          } else if (type === 'SYNC_BLOCKED_DATES' && Array.isArray(payload)) {
+            setBlockedDates(payload);
+          } else if (type === 'SYNC_EMAILS' && Array.isArray(payload)) {
+            setSimulatedEmails(payload);
+          } else if (type === 'SYNC_AUDIT_LOGS' && Array.isArray(payload)) {
+            setAuditLogs(payload);
+          }
+        };
+      }
+    } catch {}
+
+    const handleStorage = (e: StorageEvent) => {
+      if (!e.newValue) return;
+      try {
+        if (e.key === 'office_sync_bookings') {
+          const parsed = JSON.parse(e.newValue);
+          if (Array.isArray(parsed)) setBookings(parsed);
+        } else if (e.key === 'office_sync_offices') {
+          const parsed = JSON.parse(e.newValue);
+          if (Array.isArray(parsed)) setOffices(parsed);
+        } else if (e.key === 'office_sync_rooms') {
+          const parsed = JSON.parse(e.newValue);
+          if (Array.isArray(parsed)) setRooms(parsed);
+        } else if (e.key === 'office_sync_approved_users') {
+          const parsed = JSON.parse(e.newValue);
+          if (Array.isArray(parsed)) setApprovedUsers(parsed);
+        } else if (e.key === 'office_sync_access_keys') {
+          const parsed = JSON.parse(e.newValue);
+          if (Array.isArray(parsed)) setAccessKeys(parsed);
+        } else if (e.key === 'office_sync_blocked_dates') {
+          const parsed = JSON.parse(e.newValue);
+          if (Array.isArray(parsed)) setBlockedDates(parsed);
+        } else if (e.key === 'office_sync_emails') {
+          const parsed = JSON.parse(e.newValue);
+          if (Array.isArray(parsed)) setSimulatedEmails(parsed);
+        }
+      } catch {}
+    };
+
+    window.addEventListener('storage', handleStorage);
+
+    return () => {
+      window.removeEventListener('storage', handleStorage);
+      if (channel) {
+        channel.close();
+      }
+    };
+  }, []);
 
   // -------------------------------------------------------------
   // Centralized Activity & Audit Logger
@@ -893,20 +996,26 @@ export default function App() {
       if (!db) return;
       const bookingsCollection = collection(db, 'bookings');
       const unsubscribe = onSnapshot(bookingsCollection, (snapshot) => {
-        if (!snapshot.empty) {
-          const bookingList: Booking[] = [];
-          snapshot.forEach((docSnap) => {
-            bookingList.push({ id: docSnap.id, ...docSnap.data() } as Booking);
+        const bookingList: Booking[] = [];
+        snapshot.forEach((docSnap) => {
+          const data = docSnap.data();
+          bookingList.push({ ...data, id: docSnap.id } as Booking);
+        });
+        setBookings(prev => {
+          const map = new Map<string, Booking>();
+          DEFAULT_MULTI_TENANT_BOOKINGS.forEach(b => map.set(b.id, b));
+          bookingList.forEach(b => map.set(b.id, b));
+          prev.forEach(b => {
+            if (!map.has(b.id)) {
+              map.set(b.id, b);
+            }
           });
-          bookingList.sort((a, b) => b.createdAt - a.createdAt);
-          setBookings(prev => {
-            const map = new Map<string, Booking>();
-            DEFAULT_MULTI_TENANT_BOOKINGS.forEach(b => map.set(b.id, b));
-            prev.forEach(b => map.set(b.id, b));
-            bookingList.forEach(b => map.set(b.id, b));
-            return Array.from(map.values()).sort((a, b) => b.createdAt - a.createdAt);
-          });
-        }
+          const merged = Array.from(map.values()).sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
+          try {
+            localStorage.setItem('office_sync_bookings', JSON.stringify(merged));
+          } catch {}
+          return merged;
+        });
       }, (error) => {
         console.warn('Operating in offline local cache mode for bookings:', error.message);
       });
@@ -1277,14 +1386,18 @@ export default function App() {
     // Handle Multi-day recurring saves
     if (bookingData.multiDates && bookingData.multiDates.length > 0) {
       const createdBookings: Booking[] = [];
+      const resolvedTenantId = room.tenantId || activeTenant?.id || 'tenant-acme';
+      const resolvedOfficeId = room.officeId || activeOffice?.id || '';
+      const resolvedFloor = room.floor || bookingData.floor || 1;
+
       for (const dateString of bookingData.multiDates) {
         const id = `booking-${Date.now()}-${Math.random().toString(36).substr(2, 6)}`;
         const docPayload: Booking = {
           id,
-          tenantId: activeTenant?.id || '',
+          tenantId: resolvedTenantId,
           roomId: bookingData.roomId,
-          floor: bookingData.floor,
-          officeId: activeOffice?.id || room.officeId || '',
+          floor: resolvedFloor,
+          officeId: resolvedOfficeId,
           title: bookingData.title,
           description: bookingData.description,
           date: dateString,
@@ -1301,7 +1414,7 @@ export default function App() {
 
         try {
           if (db) {
-            addDoc(collection(db, 'bookings'), docPayload).catch(() => {});
+            setDoc(doc(db, 'bookings', docPayload.id), docPayload, { merge: true }).catch(() => {});
           }
         } catch {}
 
@@ -1316,6 +1429,7 @@ export default function App() {
           floor: room.floor,
           bookingDateTime: `${dateString} (${bookingData.startTime} - ${bookingData.endTime})`,
           details: `Reserved "${bookingData.title}" in ${room.name} (Lvl ${room.floor}) for ${bookingData.startTime} - ${bookingData.endTime}`,
+          tenantId: resolvedTenantId,
         });
       }
 
@@ -1347,12 +1461,16 @@ export default function App() {
     } else {
       // Single booking save
       const targetId = bookingData.id || `booking-${Date.now()}-${Math.random().toString(36).substr(2, 6)}`;
+      const resolvedTenantId = room.tenantId || activeTenant?.id || 'tenant-acme';
+      const resolvedOfficeId = room.officeId || activeOffice?.id || '';
+      const resolvedFloor = room.floor || bookingData.floor || 1;
+
       const docPayload: Booking = {
         id: targetId,
-        tenantId: activeTenant?.id || '',
+        tenantId: resolvedTenantId,
         roomId: bookingData.roomId,
-        floor: bookingData.floor,
-        officeId: activeOffice?.id || room.officeId || '',
+        floor: resolvedFloor,
+        officeId: resolvedOfficeId,
         title: bookingData.title,
         description: bookingData.description,
         date: bookingData.date,
@@ -1399,6 +1517,7 @@ export default function App() {
           floor: room.floor,
           bookingDateTime: `${bookingData.date} (${bookingData.startTime} - ${bookingData.endTime})`,
           details: `Modified reservation details for "${bookingData.title}" in ${room.name} (Lvl ${room.floor})`,
+          tenantId: resolvedTenantId,
         });
 
         const editEmail: SimulatedEmail = {
@@ -1426,7 +1545,7 @@ export default function App() {
         setBookings(prev => [docPayload, ...prev]);
         try {
           if (db) {
-            addDoc(collection(db, 'bookings'), docPayload).catch(() => {});
+            setDoc(doc(db, 'bookings', docPayload.id), docPayload, { merge: true }).catch(() => {});
           }
         } catch {}
 
@@ -1440,6 +1559,7 @@ export default function App() {
           floor: room.floor,
           bookingDateTime: `${bookingData.date} (${bookingData.startTime} - ${bookingData.endTime})`,
           details: `Created reservation "${bookingData.title}" in ${room.name} (Lvl ${room.floor})`,
+          tenantId: resolvedTenantId,
         });
 
         const newEmail: SimulatedEmail = {
@@ -2104,10 +2224,19 @@ export default function App() {
     (!activeOffice || r.officeId === activeOffice.id)
   );
 
-  const currentOfficeBookings = bookings.filter(b => 
-    (!activeTenant ? true : b.tenantId === activeTenant.id) &&
-    (!activeOffice || b.officeId === activeOffice.id)
-  );
+  const currentOfficeRoomIds = new Set(currentOfficeRooms.map(r => r.id));
+
+  const currentOfficeBookings = bookings.filter(b => {
+    if (!b) return false;
+    // 1. Direct match: If the booking belongs to any room currently active in this office/view, it MUST be visible to all staff
+    if (b.roomId && currentOfficeRoomIds.has(b.roomId)) {
+      return true;
+    }
+    // 2. Hierarchy fallback match: tenant and office
+    const tenantMatches = !activeTenant ? true : (!b.tenantId || b.tenantId === activeTenant.id);
+    const officeMatches = !activeOffice ? true : (!b.officeId || b.officeId === activeOffice.id);
+    return tenantMatches && officeMatches;
+  });
 
   const currentTenantAccessKeys = accessKeys.filter(k => 
     !activeTenant ? true : (k.tenantId === activeTenant.id || (isMasterAdmin && k.tenantId === 'ALL'))
