@@ -89,20 +89,33 @@ export const Navbar: React.FC<NavbarProps> = ({
           )}
         </div>
 
-        {/* Center: Office & Campus Switcher */}
-        {activeOffice && onSwitchOffice && (
-          <div className="hidden md:flex items-center gap-2 px-3 py-1 bg-slate-50 border border-slate-200 rounded-xl text-xs font-bold text-slate-800 shadow-2xs max-w-sm">
-            <span className="truncate" title={`${activeOffice.name} - ${activeOffice.location}`}>
-              🏢 {activeOffice.name}
-            </span>
-            <button 
-              onClick={onSwitchOffice} 
-              className="text-[11px] text-indigo-600 hover:text-indigo-800 underline ml-1 shrink-0 font-bold cursor-pointer"
-            >
-              Switch Campus
-            </button>
-          </div>
-        )}
+        {/* Center: Office & Campus Switcher + Live DB Sync Indicator */}
+        <div className="hidden md:flex items-center gap-2.5">
+          {activeOffice && onSwitchOffice && (
+            <div className="flex items-center gap-2 px-3 py-1 bg-slate-50 border border-slate-200 rounded-xl text-xs font-bold text-slate-800 shadow-2xs max-w-sm">
+              <span className="truncate" title={`${activeOffice.name} - ${activeOffice.location}`}>
+                🏢 {activeOffice.name}
+              </span>
+              <button 
+                onClick={onSwitchOffice} 
+                className="text-[11px] text-indigo-600 hover:text-indigo-800 underline ml-1 shrink-0 font-bold cursor-pointer"
+              >
+                Switch Campus
+              </button>
+            </div>
+          )}
+
+          {activeTenant && (
+            <div className="flex items-center gap-1.5 px-2.5 py-1 bg-emerald-50 border border-emerald-200/80 rounded-xl text-[11px] font-semibold text-emerald-800 shadow-2xs">
+              <span className="relative flex h-2 w-2">
+                <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
+                <span className="relative inline-flex rounded-full h-2 w-2 bg-emerald-500"></span>
+              </span>
+              <span className="font-mono text-[10px] uppercase font-bold tracking-wider">{activeTenant.name} DB</span>
+              <span className="text-emerald-600 font-normal">Live Sync</span>
+            </div>
+          )}
+        </div>
 
         {/* Right: Actions & User Status */}
         <div className="flex items-center gap-2 sm:gap-3 shrink-0">

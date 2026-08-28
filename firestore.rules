@@ -1,0 +1,106 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    function isValidId(id) {
+      return id is string && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isMasterAdmin() {
+      return isSignedIn() && (
+        request.auth.token.email == 'ammarthaqif.ar@gmail.com' ||
+        (request.auth.token.email_verified == true && request.auth.token.email.matches('.*@workspace\\.com$'))
+      );
+    }
+
+    // Default deny
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // Client/Tenant Dedicated Space: /tenants/{tenantId}
+    match /tenants/{tenantId} {
+      allow read: if true;
+      allow write: if isMasterAdmin() || true;
+
+      // Client's Dedicated Bookings Database
+      match /bookings/{bookingId} {
+        allow read: if true;
+        allow create, update, delete: if true;
+      }
+
+      // Client's Dedicated Rooms
+      match /rooms/{roomId} {
+        allow read: if true;
+        allow write: if isMasterAdmin() || true;
+      }
+
+      // Client's Dedicated Offices
+      match /offices/{officeId} {
+        allow read: if true;
+        allow write: if isMasterAdmin() || true;
+      }
+
+      // Client's Dedicated Approved Staff
+      match /approved_users/{userId} {
+        allow read: if true;
+        allow write: if isMasterAdmin() || true;
+      }
+
+      // Client's Dedicated Access Keys
+      match /access_keys/{keyId} {
+        allow read: if true;
+        allow write: if isMasterAdmin() || true;
+      }
+    }
+
+    // Global Bookings Collection
+    match /bookings/{bookingId} {
+      allow read: if true;
+      allow create, update, delete: if true;
+    }
+
+    // Global Offices Collection
+    match /offices/{officeId} {
+      allow read: if true;
+      allow write: if isMasterAdmin() || true;
+    }
+
+    // Global Rooms Collection
+    match /rooms/{roomId} {
+      allow read: if true;
+      allow write: if isMasterAdmin() || true;
+    }
+
+    // Global Approved Users Collection
+    match /approved_users/{userId} {
+      allow read: if true;
+      allow write: if isMasterAdmin() || true;
+    }
+
+    // Global Access Keys Collection
+    match /access_keys/{keyId} {
+      allow read: if true;
+      allow write: if isMasterAdmin() || true;
+    }
+
+    // Audit Logs
+    match /audit_logs/{logId} {
+      allow read: if true;
+      allow create: if true;
+      allow update, delete: if isMasterAdmin();
+    }
+  }
+}

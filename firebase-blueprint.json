@@ -1,0 +1,175 @@
+{
+  "entities": {
+    "Tenant": {
+      "title": "Tenant",
+      "description": "Corporate tenant or client organization profile",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "description": "Unique tenant identifier" },
+        "name": { "type": "string", "description": "Company name" },
+        "slug": { "type": "string", "description": "URL slug" },
+        "code": { "type": "string", "description": "Company code" },
+        "description": { "type": "string", "description": "Description of workspace" },
+        "contactEmail": { "type": "string", "format": "email", "description": "Primary contact" },
+        "logoBadge": { "type": "string", "description": "Visual logo or initials badge" },
+        "themeColor": { "type": "string", "description": "Theme accent color" },
+        "planTier": { "type": "string", "description": "Subscription tier" },
+        "createdAt": { "type": "number", "description": "Creation timestamp in ms" },
+        "active": { "type": "boolean", "description": "Whether tenant is active" }
+      },
+      "required": ["id", "name", "contactEmail", "active"]
+    },
+    "Office": {
+      "title": "Office",
+      "description": "Office workspace location",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "description": "Unique office identifier" },
+        "tenantId": { "type": "string", "description": "Associated corporate tenant" },
+        "name": { "type": "string", "description": "Office building or location name" },
+        "location": { "type": "string", "description": "Physical address" },
+        "passkey": { "type": "string", "description": "Office access passkey" },
+        "floors": { "type": "array", "description": "Array of floor levels" },
+        "createdAt": { "type": "number", "description": "Creation timestamp in ms" }
+      },
+      "required": ["id", "name", "passkey"]
+    },
+    "Room": {
+      "title": "Room",
+      "description": "Meeting room within an office",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "description": "Unique room identifier" },
+        "tenantId": { "type": "string", "description": "Associated corporate tenant" },
+        "officeId": { "type": "string", "description": "Associated office ID" },
+        "name": { "type": "string", "description": "Room name" },
+        "floor": { "type": "number", "description": "Floor level" },
+        "capacity": { "type": "number", "description": "Max seating capacity" },
+        "amenities": { "type": "array", "description": "List of amenities" },
+        "description": { "type": "string", "description": "Room purpose and specs" },
+        "color": { "type": "string", "description": "Badge color" }
+      },
+      "required": ["id", "name", "floor", "capacity"]
+    },
+    "Booking": {
+      "title": "Booking",
+      "description": "Meeting room reservation record",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "description": "Unique booking identifier" },
+        "tenantId": { "type": "string", "description": "Client company identifier" },
+        "roomId": { "type": "string", "description": "Room identifier" },
+        "floor": { "type": "number", "description": "Floor level" },
+        "officeId": { "type": "string", "description": "Office identifier" },
+        "title": { "type": "string", "description": "Meeting title" },
+        "hostName": { "type": "string", "description": "Name of host" },
+        "hostEmail": { "type": "string", "format": "email", "description": "Email of host" },
+        "hostUid": { "type": "string", "description": "Firebase UID of host if authenticated" },
+        "date": { "type": "string", "description": "Date in YYYY-MM-DD" },
+        "startTime": { "type": "string", "description": "Start time HH:MM" },
+        "endTime": { "type": "string", "description": "End time HH:MM" },
+        "description": { "type": "string", "description": "Meeting agenda" },
+        "attendees": { "type": "array", "description": "Attendee emails" },
+        "createdAt": { "type": "number", "description": "Creation timestamp in ms" }
+      },
+      "required": ["id", "tenantId", "roomId", "date", "startTime", "endTime", "title", "hostEmail"]
+    },
+    "ApprovedUser": {
+      "title": "ApprovedUser",
+      "description": "Staff member whitelisted to book rooms for a tenant",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "description": "Unique identifier" },
+        "tenantId": { "type": "string", "description": "Associated corporate tenant" },
+        "email": { "type": "string", "format": "email", "description": "Staff email" },
+        "name": { "type": "string", "description": "Staff full name" },
+        "department": { "type": "string", "description": "Department" },
+        "addedBy": { "type": "string", "description": "Admin email who whitelisted" },
+        "addedAt": { "type": "number", "description": "Timestamp added" }
+      },
+      "required": ["id", "email", "addedBy"]
+    },
+    "AccessKey": {
+      "title": "AccessKey",
+      "description": "Access key or token for workspace entry",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "description": "Unique key identifier" },
+        "tenantId": { "type": "string", "description": "Associated corporate tenant or ALL" },
+        "token": { "type": "string", "description": "Security token string" },
+        "label": { "type": "string", "description": "Token label" },
+        "role": { "type": "string", "description": "Assigned role" },
+        "usedCount": { "type": "number", "description": "Usage counter" },
+        "active": { "type": "boolean", "description": "Whether active" },
+        "createdAt": { "type": "number", "description": "Creation timestamp" }
+      },
+      "required": ["id", "tenantId", "token", "active"]
+    },
+    "AuditLog": {
+      "title": "AuditLog",
+      "description": "System activity audit trail",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "description": "Unique log identifier" },
+        "tenantId": { "type": "string", "description": "Tenant ID" },
+        "action": { "type": "string", "description": "Audit action type" },
+        "actorEmail": { "type": "string", "description": "Actor email" },
+        "actorName": { "type": "string", "description": "Actor display name" },
+        "details": { "type": "string", "description": "Event details" },
+        "timestamp": { "type": "number", "description": "Event timestamp" },
+        "formattedTimestamp": { "type": "string", "description": "Formatted timestamp" }
+      },
+      "required": ["id", "action", "actorEmail", "details", "timestamp"]
+    }
+  },
+  "firestore": {
+    "/tenants/{tenantId}": {
+      "schema": "Tenant",
+      "description": "Corporate client tenant profile"
+    },
+    "/tenants/{tenantId}/bookings/{bookingId}": {
+      "schema": "Booking",
+      "description": "Client-dedicated database of meeting room reservations for company staff"
+    },
+    "/tenants/{tenantId}/rooms/{roomId}": {
+      "schema": "Room",
+      "description": "Client-dedicated meeting room inventory"
+    },
+    "/tenants/{tenantId}/offices/{officeId}": {
+      "schema": "Office",
+      "description": "Client-dedicated office locations"
+    },
+    "/tenants/{tenantId}/approved_users/{userId}": {
+      "schema": "ApprovedUser",
+      "description": "Client-dedicated staff whitelist"
+    },
+    "/tenants/{tenantId}/access_keys/{keyId}": {
+      "schema": "AccessKey",
+      "description": "Client-dedicated security tokens"
+    },
+    "/bookings/{bookingId}": {
+      "schema": "Booking",
+      "description": "Global indexed collection of room reservations"
+    },
+    "/offices/{officeId}": {
+      "schema": "Office",
+      "description": "Office locations directory"
+    },
+    "/rooms/{roomId}": {
+      "schema": "Room",
+      "description": "Meeting rooms directory"
+    },
+    "/approved_users/{userId}": {
+      "schema": "ApprovedUser",
+      "description": "Approved users collection"
+    },
+    "/access_keys/{keyId}": {
+      "schema": "AccessKey",
+      "description": "Access keys collection"
+    },
+    "/audit_logs/{logId}": {
+      "schema": "AuditLog",
+      "description": "Audit trail records"
+    }
+  }
+}
