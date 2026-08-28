@@ -425,7 +425,43 @@ export function resolveAccessTokenOrPasskey(
     };
   }
 
-  // 3. DYNAMIC TENANT PREFIX & CODE MATCHING (e.g. ACME-ADMIN-..., NEXUS-STAFF-..., VERTEX-ENG-..., STARLIGHT-ADMIN-..., KEY-ACME-...)
+  // 3. CHECK ALL OFFICE PASSKEYS FIRST (e.g. ACME-NY-45, NEXUS-SG-88, STARLIGHT-LA-10, VERTEX-AI-500, HQ2026)
+  const allOffices = [...offices, ...DEFAULT_MULTI_TENANT_OFFICES];
+  const matchedOffice = allOffices.find(o => 
+    isTokenMatch(cleanInput, o.passkey) ||
+    cleanAlphaNumericToken(o.passkey) === alphaInput ||
+    (o.passkey && cleanInput.length >= 3 && cleanAlphaNumericToken(o.passkey) === alphaInput)
+  );
+
+  if (matchedOffice) {
+    const officeTenant = allTenantsList.find(t => t.id === matchedOffice.tenantId);
+    if (officeTenant) {
+      const dynamicKey: AccessKey = {
+        id: `key-office-${matchedOffice.id}-passkey`,
+        tenantId: matchedOffice.tenantId || officeTenant.id,
+        token: matchedOffice.passkey,
+        label: `${matchedOffice.name} Passkey`,
+        role: 'staff',
+        active: true,
+        maxUses: 99999,
+        usedCount: 0,
+        createdAt: Date.now(),
+        createdBy: 'Office Passkey Resolution'
+      };
+      return {
+        valid: true,
+        key: dynamicKey,
+        tenant: officeTenant,
+        office: matchedOffice,
+        isSuperAdmin: false,
+        role: 'staff',
+        token: matchedOffice.passkey,
+        source: 'office_passkey'
+      };
+    }
+  }
+
+  // 4. DYNAMIC TENANT PREFIX & CODE MATCHING (e.g. ACME-ADMIN-..., NEXUS-STAFF-..., VERTEX-ENG-..., STARLIGHT-ADMIN-..., KEY-ACME-...)
   const tokenParts = cleanInput.split(/[-_\s]+/);
   const firstPart = tokenParts[0] || '';
   const firstAlpha = cleanAlphaNumericToken(firstPart);
@@ -438,9 +474,10 @@ export function resolveAccessTokenOrPasskey(
     cleanAlphaNumericToken(t.slug) === firstAlpha
   );
 
-  // If first segment was a generic prefix (e.g. KEY, SEC, CORP, TOKEN), search all parts
+  // If first segment was a generic prefix (e.g. KEY, SEC, CORP, TOKEN, ID), search all parts
   if (!matchedTenantByPrefix) {
     for (const part of tokenParts) {
+      if (!part || part.length < 2) continue;
       const alphaPart = cleanAlphaNumericToken(part);
       const found = allTenantsList.find(t =>
         t.code.toUpperCase() === part ||
@@ -504,84 +541,6 @@ export function resolveAccessTokenOrPasskey(
       role,
       token: cleanInput,
       source: 'tenant_prefix_match'
-    };
-  }
-
-  // 4. SYSTEM & GENERIC CORPORATE PREFIX TOKENS (e.g. SEC-..., CORP-..., GLOBAL-..., KEY-..., SYS-..., AUTH-..., PASS-...)
-  const isGenericCorporatePrefix = [
-    'SEC', 'CORP', 'GLOBAL', 'KEY', 'SYS', 'AUTH', 'TOKEN', 'PASS', 'WORKSPACE', 'OFFICE'
-  ].includes(firstPart);
-
-  if (isGenericCorporatePrefix) {
-    const isMasterRole = cleanInput.includes('ADMIN') || cleanInput.includes('EXEC') || cleanInput.includes('DIRECTOR');
-    const isGuestRole = cleanInput.includes('GUEST') || cleanInput.includes('VISITOR');
-    const role: TenantRole = isMasterRole ? 'company_admin' : (isGuestRole ? 'guest' : 'staff');
-
-    const dynamicKey: AccessKey = {
-      id: `key-corp-dynamic-${Date.now()}`,
-      tenantId: primaryTenant.id,
-      token: cleanInput,
-      label: `${primaryTenant.name} Corporate ${role === 'company_admin' ? 'Admin' : 'Staff'} Token`,
-      role,
-      active: true,
-      maxUses: 99999,
-      usedCount: 0,
-      createdAt: Date.now(),
-      createdBy: 'Corporate Prefix Resolution'
-    };
-
-    return {
-      valid: true,
-      key: dynamicKey,
-      tenant: primaryTenant,
-      isSuperAdmin: false,
-      role,
-      token: cleanInput,
-      source: 'corporate_prefix_match'
-    };
-  }
-
-  // 5. CHECK OFFICE PASSKEYS (e.g. ACME-NY-45, NEXUS-SG-88, STARLIGHT-LA-10, VERTEX-AI-500)
-  const allOffices = [...offices, ...DEFAULT_MULTI_TENANT_OFFICES];
-  const matchedOffice = allOffices.find(o => 
-    isTokenMatch(cleanInput, o.passkey) ||
-    cleanAlphaNumericToken(o.passkey) === alphaInput ||
-    (o.passkey && cleanInput.length >= 4 && cleanAlphaNumericToken(o.passkey) === alphaInput)
-  );
-
-  if (matchedOffice) {
-    const officeTenant = allTenantsList.find(t => t.id === matchedOffice.tenantId);
-    if (!officeTenant) {
-      return {
-        valid: false,
-        role: 'staff',
-        token: cleanInput,
-        source: 'unrecognized_office_tenant',
-        reason: 'Office passkey is not linked to any recognized client organization.'
-      };
-    }
-
-    const dynamicKey: AccessKey = {
-      id: `key-office-${matchedOffice.id}-passkey`,
-      tenantId: matchedOffice.tenantId || officeTenant.id,
-      token: matchedOffice.passkey,
-      label: `${matchedOffice.name} Passkey`,
-      role: 'staff',
-      active: true,
-      maxUses: 99999,
-      usedCount: 0,
-      createdAt: Date.now(),
-      createdBy: 'Office Passkey Resolution'
-    };
-    return {
-      valid: true,
-      key: dynamicKey,
-      tenant: officeTenant,
-      office: matchedOffice,
-      isSuperAdmin: false,
-      role: 'staff',
-      token: matchedOffice.passkey,
-      source: 'office_passkey'
     };
   }
 
@@ -684,45 +643,12 @@ export function resolveAccessTokenOrPasskey(
     };
   }
 
-  // 7. MULTI-SEGMENT CRYPTOGRAPHIC TOKEN RESILIENT RESOLUTION
-  // Catches tokens generated across tabs or via custom generator forms
-  if (tokenParts.length >= 2 && cleanInput.length >= 6) {
-    const isMasterRole = cleanInput.includes('ADMIN') || cleanInput.includes('EXEC') || cleanInput.includes('DIRECTOR') || cleanInput.includes('LEAD') || cleanInput.includes('FACILITIES');
-    const isGuestRole = cleanInput.includes('GUEST') || cleanInput.includes('VISITOR');
-    const role: TenantRole = isMasterRole ? 'company_admin' : (isGuestRole ? 'guest' : 'staff');
-
-    const resolvedTenant = matchedTenantByPrefix || primaryTenant;
-
-    const dynamicKey: AccessKey = {
-      id: `key-entropy-${Date.now()}`,
-      tenantId: resolvedTenant.id,
-      token: cleanInput,
-      label: `${resolvedTenant.name} Verified Key`,
-      role,
-      active: true,
-      maxUses: 99999,
-      usedCount: 0,
-      createdAt: Date.now(),
-      createdBy: 'Cryptographic Multi-Segment Resolution'
-    };
-
-    return {
-      valid: true,
-      key: dynamicKey,
-      tenant: resolvedTenant,
-      isSuperAdmin: false,
-      role,
-      token: cleanInput,
-      source: 'cryptographic_match'
-    };
-  }
-
   return {
     valid: false,
     role: 'staff',
     token: cleanInput,
     source: 'unmatched',
-    reason: 'Invalid access token. Please enter a valid organization token (e.g. ACME-ADMIN-2026, ACME-STAFF-101, or SUPERADMIN-AUTH).'
+    reason: 'Invalid access token or office passkey. Please verify your credentials or select a client shortcut.'
   };
 }
 

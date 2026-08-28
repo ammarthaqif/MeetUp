@@ -12,8 +12,8 @@ import {
   Sparkles,
   Lock
 } from 'lucide-react';
-import { Tenant, AccessKey } from '../types';
-import { DEFAULT_TENANTS, DEFAULT_TENANT_ACCESS_KEYS } from '../data/defaultTenants';
+import { Tenant, AccessKey, Office, ApprovedUser } from '../types';
+import { DEFAULT_TENANTS, DEFAULT_TENANT_ACCESS_KEYS, DEFAULT_MULTI_TENANT_OFFICES, DEFAULT_MULTI_TENANT_APPROVED_USERS } from '../data/defaultTenants';
 import { 
   timingSafeEqual, 
   getRateLimitStatus, 
@@ -31,8 +31,10 @@ interface TenantSwitcherModalProps {
   tenants: Tenant[];
   currentTenant: Tenant | null;
   accessKeys: AccessKey[];
+  offices?: Office[];
+  approvedUsers?: ApprovedUser[];
   isMasterAdmin: boolean;
-  onSwitchTenant: (tenant: Tenant, token?: string) => void;
+  onSwitchTenant: (tenant: Tenant, token?: string, initialOffice?: Office) => void;
   onLockTenant: () => void;
 }
 
@@ -42,6 +44,8 @@ export const TenantSwitcherModal: React.FC<TenantSwitcherModalProps> = ({
   tenants,
   currentTenant,
   accessKeys,
+  offices = DEFAULT_MULTI_TENANT_OFFICES,
+  approvedUsers = DEFAULT_MULTI_TENANT_APPROVED_USERS,
   isMasterAdmin,
   onSwitchTenant,
   onLockTenant,
@@ -87,7 +91,7 @@ export const TenantSwitcherModal: React.FC<TenantSwitcherModalProps> = ({
     } catch {}
 
     const rawKeys: AccessKey[] = Array.from(keyMap.values());
-    const resolved = resolveAccessTokenOrPasskey(cleanInput, rawKeys, tenants);
+    const resolved = resolveAccessTokenOrPasskey(cleanInput, rawKeys, tenants, offices, approvedUsers);
 
     if (!resolved.valid || !resolved.tenant) {
       const penalty = recordFailedAttempt();
@@ -96,7 +100,7 @@ export const TenantSwitcherModal: React.FC<TenantSwitcherModalProps> = ({
       } else if (penalty.warning) {
         setErrorMsg(penalty.warning);
       } else {
-        setErrorMsg(resolved.reason || 'Invalid company access token. Please verify with your workspace administrator.');
+        setErrorMsg(resolved.reason || 'Invalid company access token or office passkey. Please verify with your workspace administrator.');
       }
       return;
     }
@@ -105,7 +109,7 @@ export const TenantSwitcherModal: React.FC<TenantSwitcherModalProps> = ({
     resetRateLimit();
 
     const targetTenant = resolved.tenant;
-    onSwitchTenant(targetTenant, resolved.token);
+    onSwitchTenant(targetTenant, resolved.token, resolved.office);
     onClose();
   };
 

@@ -480,7 +480,12 @@ export default function App() {
   // -------------------------------------------------------------
   // Tenant Handlers (Unlock, Switch, Lock, Save, Delete)
   // -------------------------------------------------------------
-  const handleUnlockTenant = (tenant: Tenant, token: string, role: 'company_admin' | 'staff' | 'guest') => {
+  const handleUnlockTenant = (
+    tenant: Tenant, 
+    token: string, 
+    role: 'company_admin' | 'staff' | 'guest',
+    initialOffice?: Office
+  ) => {
     setActiveTenant(tenant);
     setTenantAccessToken(token);
     
@@ -493,14 +498,37 @@ export default function App() {
       return updated;
     });
 
-    // Auto-select first office belonging to this tenant
+    // Auto-select office belonging to this tenant
     const tenantOffices = offices.filter(o => o.tenantId === tenant.id);
-    if (tenantOffices.length > 0) {
-      setActiveOffice(tenantOffices[0]);
-      setSelectedFloor(tenantOffices[0].floors[0] || 1);
-    } else {
-      setActiveOffice(null);
+    let selectedOfficeToSet = (initialOffice && initialOffice.tenantId === tenant.id)
+      ? initialOffice
+      : (tenantOffices.length > 0 ? tenantOffices[0] : null);
+
+    // If tenant has no offices yet, auto-provision an initial office so user is never stuck
+    if (!selectedOfficeToSet) {
+      const newOffice: Office = {
+        id: `office-${tenant.id}-hq`,
+        tenantId: tenant.id,
+        name: `${tenant.name} Headquarters`,
+        location: 'Main Building, Floor 1-2',
+        passkey: `${tenant.code.toUpperCase()}-HQ-01`,
+        floors: [1, 2]
+      };
+      setOffices(prev => {
+        const updated = [...prev, newOffice];
+        try {
+          localStorage.setItem('office_sync_offices', JSON.stringify(updated));
+        } catch {}
+        return updated;
+      });
+      selectedOfficeToSet = newOffice;
     }
+
+    setActiveOffice(selectedOfficeToSet);
+    setSelectedFloor(selectedOfficeToSet.floors[0] || 1);
+    try {
+      localStorage.setItem('office_sync_active_office', JSON.stringify(selectedOfficeToSet));
+    } catch {}
 
     logActivity({
       action: 'TOKEN_ACCESS_GRANTED',
@@ -531,19 +559,48 @@ export default function App() {
     showNotification('success', 'Master Platform Administrator privileges granted.');
   };
 
-  const handleSwitchTenant = (tenant: Tenant, token?: string) => {
+  const handleSwitchTenant = (tenant: Tenant, token?: string, initialOffice?: Office) => {
     setActiveTenant(tenant);
     if (token) {
       setTenantAccessToken(token);
+      setVerifiedTokens(prev => {
+        const updated = Array.from(new Set([...prev, token]));
+        try {
+          localStorage.setItem('office_sync_verified_tokens', JSON.stringify(updated));
+        } catch {}
+        return updated;
+      });
     }
     
     const tenantOffices = offices.filter(o => o.tenantId === tenant.id);
-    if (tenantOffices.length > 0) {
-      setActiveOffice(tenantOffices[0]);
-      setSelectedFloor(tenantOffices[0].floors[0] || 1);
-    } else {
-      setActiveOffice(null);
+    let selectedOfficeToSet = (initialOffice && initialOffice.tenantId === tenant.id)
+      ? initialOffice
+      : (tenantOffices.length > 0 ? tenantOffices[0] : null);
+
+    if (!selectedOfficeToSet) {
+      const newOffice: Office = {
+        id: `office-${tenant.id}-hq`,
+        tenantId: tenant.id,
+        name: `${tenant.name} Headquarters`,
+        location: 'Main Building, Floor 1-2',
+        passkey: `${tenant.code.toUpperCase()}-HQ-01`,
+        floors: [1, 2]
+      };
+      setOffices(prev => {
+        const updated = [...prev, newOffice];
+        try {
+          localStorage.setItem('office_sync_offices', JSON.stringify(updated));
+        } catch {}
+        return updated;
+      });
+      selectedOfficeToSet = newOffice;
     }
+
+    setActiveOffice(selectedOfficeToSet);
+    setSelectedFloor(selectedOfficeToSet.floors[0] || 1);
+    try {
+      localStorage.setItem('office_sync_active_office', JSON.stringify(selectedOfficeToSet));
+    } catch {}
 
     logActivity({
       action: 'TENANT_SWITCHED',
@@ -2207,6 +2264,8 @@ export default function App() {
         <TenantPortalGate
           tenants={tenants}
           accessKeys={accessKeys}
+          offices={offices}
+          approvedUsers={approvedUsers}
           onUnlockTenant={handleUnlockTenant}
           onUnlockMasterAdmin={handleUnlockMasterAdmin}
           user={user}
@@ -2820,6 +2879,8 @@ export default function App() {
         tenants={tenants}
         currentTenant={activeTenant}
         accessKeys={accessKeys}
+        offices={offices}
+        approvedUsers={approvedUsers}
         isMasterAdmin={isMasterAdmin}
         onSwitchTenant={handleSwitchTenant}
         onLockTenant={handleLockTenant}

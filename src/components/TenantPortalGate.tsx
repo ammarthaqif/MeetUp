@@ -19,8 +19,8 @@ import {
   EyeOff,
   RotateCcw
 } from 'lucide-react';
-import { Tenant, AccessKey } from '../types';
-import { DEFAULT_TENANTS, DEFAULT_TENANT_ACCESS_KEYS } from '../data/defaultTenants';
+import { Tenant, AccessKey, Office, ApprovedUser } from '../types';
+import { DEFAULT_TENANTS, DEFAULT_TENANT_ACCESS_KEYS, DEFAULT_MULTI_TENANT_OFFICES, DEFAULT_MULTI_TENANT_APPROVED_USERS } from '../data/defaultTenants';
 import { 
   timingSafeEqual, 
   getRateLimitStatus, 
@@ -36,7 +36,9 @@ import {
 interface TenantPortalGateProps {
   tenants: Tenant[];
   accessKeys: AccessKey[];
-  onUnlockTenant: (tenant: Tenant, token: string, role: 'company_admin' | 'staff' | 'guest') => void;
+  offices?: Office[];
+  approvedUsers?: ApprovedUser[];
+  onUnlockTenant: (tenant: Tenant, token: string, role: 'company_admin' | 'staff' | 'guest', initialOffice?: Office) => void;
   onUnlockMasterAdmin: (token: string) => void;
   user: any;
   onLoginGoogle: () => void;
@@ -48,6 +50,8 @@ const SUPER_ADMIN_EMAIL = 'ammarthaqif.ar@gmail.com';
 export const TenantPortalGate: React.FC<TenantPortalGateProps> = ({
   tenants,
   accessKeys,
+  offices = DEFAULT_MULTI_TENANT_OFFICES,
+  approvedUsers = DEFAULT_MULTI_TENANT_APPROVED_USERS,
   onUnlockTenant,
   onUnlockMasterAdmin,
   user,
@@ -123,7 +127,7 @@ export const TenantPortalGate: React.FC<TenantPortalGateProps> = ({
       } catch {}
 
       const rawKeys = Array.from(keyMap.values());
-      const resolved = resolveAccessTokenOrPasskey(cleanInput, rawKeys, tenants);
+      const resolved = resolveAccessTokenOrPasskey(cleanInput, rawKeys, tenants, offices, approvedUsers);
 
       // If not valid, record attempt and display clear guidance
       if (!resolved.valid || !resolved.tenant) {
@@ -133,7 +137,7 @@ export const TenantPortalGate: React.FC<TenantPortalGateProps> = ({
         } else if (penalty.warning) {
           setErrorMsg(penalty.warning);
         } else {
-          setErrorMsg(resolved.reason || 'Invalid company access token. Please verify or use a shortcut below.');
+          setErrorMsg(resolved.reason || 'Invalid company access token or office passkey. Please verify or use a shortcut below.');
         }
         setIsVerifying(false);
         return;
@@ -149,7 +153,7 @@ export const TenantPortalGate: React.FC<TenantPortalGateProps> = ({
         setIsVerifying(false);
         onUnlockMasterAdmin(resolved.token);
         if (targetTenant) {
-          onUnlockTenant(targetTenant, resolved.token, 'company_admin');
+          onUnlockTenant(targetTenant, resolved.token, 'company_admin', resolved.office);
         }
         return;
       }
@@ -159,7 +163,7 @@ export const TenantPortalGate: React.FC<TenantPortalGateProps> = ({
       const roleToAssign = resolved.role || 'staff';
       setSuccessMsg(`Verified! Unlocking ${targetTenant.name} workspace...`);
       setIsVerifying(false);
-      onUnlockTenant(targetTenant, resolved.token, roleToAssign);
+      onUnlockTenant(targetTenant, resolved.token, roleToAssign, resolved.office);
     }, delayMs);
   };
 
