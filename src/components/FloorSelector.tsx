@@ -2,6 +2,7 @@ import React from 'react';
 import { motion } from 'motion/react';
 import { Layers, CheckCircle2, AlertCircle } from 'lucide-react';
 import { Room, Booking } from '../types';
+import { timeToMinutes, formatDateToISO } from '../utils';
 
 interface FloorSelectorProps {
   selectedFloor: number;
@@ -30,7 +31,7 @@ export const FloorSelector: React.FC<FloorSelectorProps> = ({
     
     // Check which rooms are CURRENTLY occupied right now
     const now = new Date();
-    const todayStr = now.toISOString().split('T')[0];
+    const todayStr = formatDateToISO(now);
     const currentMin = now.getHours() * 60 + now.getMinutes();
 
     let occupiedRightNowCount = 0;
@@ -38,10 +39,8 @@ export const FloorSelector: React.FC<FloorSelectorProps> = ({
       floorRooms.forEach(room => {
         const roomBookings = activeBookings.filter(b => b.roomId === room.id);
         const isOccupied = roomBookings.some(b => {
-          const [sh, sm] = b.startTime.split(':').map(Number);
-          const [eh, em] = b.endTime.split(':').map(Number);
-          const startMin = sh * 60 + sm;
-          const endMin = eh * 60 + em;
+          const startMin = timeToMinutes(b.startTime);
+          const endMin = timeToMinutes(b.endTime);
           return currentMin >= startMin && currentMin < endMin;
         });
         if (isOccupied) occupiedRightNowCount++;

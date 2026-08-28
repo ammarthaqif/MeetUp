@@ -512,7 +512,8 @@ export default function App() {
         name: `${tenant.name} Headquarters`,
         location: 'Main Building, Floor 1-2',
         passkey: `${tenant.code.toUpperCase()}-HQ-01`,
-        floors: [1, 2]
+        floors: [1, 2],
+        createdAt: Date.now(),
       };
       setOffices(prev => {
         const updated = [...prev, newOffice];
@@ -584,7 +585,8 @@ export default function App() {
         name: `${tenant.name} Headquarters`,
         location: 'Main Building, Floor 1-2',
         passkey: `${tenant.code.toUpperCase()}-HQ-01`,
-        floors: [1, 2]
+        floors: [1, 2],
+        createdAt: Date.now(),
       };
       setOffices(prev => {
         const updated = [...prev, newOffice];
@@ -2152,13 +2154,14 @@ export default function App() {
 
   // Timeline & room selection triggers (Protected with Auth & Whitelist Gate)
   const handleRoomBookClick = (room: Room, hour?: string, endTime?: string) => {
+    const effectiveHour = hour || '09:00';
     if (!isUserAuthorizedToBook()) {
-      setPendingBookingIntent({ room, hour: hour || null, date: selectedDate, endTime: endTime || undefined });
+      setPendingBookingIntent({ room, hour: effectiveHour, date: selectedDate, endTime: endTime || undefined });
       setIsAuthModalOpen(true);
       return;
     }
     setSelectedRoomForModal(room);
-    setSelectedHourForModal(hour || null);
+    setSelectedHourForModal(effectiveHour);
     setSelectedEndTimeForModal(endTime || undefined);
     setEditingBooking(null);
     setIsModalOpen(true);
@@ -2166,13 +2169,14 @@ export default function App() {
 
   const handleTimelineCellClick = (room: Room, hour: string, customDate?: string) => {
     const targetDate = customDate || selectedDate;
+    const effectiveHour = hour || '09:00';
     if (!isUserAuthorizedToBook()) {
-      setPendingBookingIntent({ room, hour, date: targetDate });
+      setPendingBookingIntent({ room, hour: effectiveHour, date: targetDate });
       setIsAuthModalOpen(true);
       return;
     }
     setSelectedRoomForModal(room);
-    setSelectedHourForModal(hour);
+    setSelectedHourForModal(effectiveHour);
     setSelectedEndTimeForModal(undefined);
     if (customDate) {
       setSelectedDate(customDate);
@@ -2185,23 +2189,24 @@ export default function App() {
     const room = rooms.find(r => r.id === booking.roomId);
     if (!room) return;
     setSelectedRoomForModal(room);
-    setSelectedHourForModal(null);
-    setSelectedEndTimeForModal(undefined);
+    setSelectedHourForModal(booking.startTime || '09:00');
+    setSelectedEndTimeForModal(booking.endTime || undefined);
     setEditingBooking(booking);
     setIsModalOpen(true);
   };
 
   const handleProceedWithBookingFromFinder = (room: Room, date: string, start: string, end: string) => {
+    const effectiveStart = start || '09:00';
     if (!isUserAuthorizedToBook()) {
-      setPendingBookingIntent({ room, hour: start, date, endTime: end });
+      setPendingBookingIntent({ room, hour: effectiveStart, date, endTime: end });
       setIsAuthModalOpen(true);
       return;
     }
 
     setSelectedRoomForModal(room);
-    setSelectedDate(date);
-    setSelectedHourForModal(start);
-    setSelectedEndTimeForModal(end);
+    setSelectedDate(date || selectedDate);
+    setSelectedHourForModal(effectiveStart);
+    setSelectedEndTimeForModal(end || undefined);
     setEditingBooking(null);
     setIsModalOpen(true);
   };

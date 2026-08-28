@@ -1,19 +1,24 @@
 import { Booking } from './types';
 
 /**
- * Converts a time string "HH:MM" into minutes from midnight for easy math
+ * Converts a time string "HH:MM" into minutes from midnight for easy math.
+ * Safely handles null, undefined, or malformed time strings.
  */
-export const timeToMinutes = (timeStr: string): number => {
-  const [hours, minutes] = timeStr.split(':').map(Number);
-  return hours * 60 + minutes;
+export const timeToMinutes = (timeStr?: string | null): number => {
+  if (!timeStr || typeof timeStr !== 'string') return 540; // fallback to 09:00 (9 * 60)
+  const parts = timeStr.split(':');
+  const hours = Number(parts[0]);
+  const minutes = Number(parts[1]);
+  return (isNaN(hours) ? 9 : hours) * 60 + (isNaN(minutes) ? 0 : minutes);
 };
 
 /**
  * Formats minutes from midnight back into a "HH:MM" string
  */
-export const minutesToTime = (totalMinutes: number): string => {
-  const hours = Math.floor(totalMinutes / 60);
-  const minutes = totalMinutes % 60;
+export const minutesToTime = (totalMinutes?: number | null): string => {
+  const safeMins = typeof totalMinutes === 'number' && !isNaN(totalMinutes) ? totalMinutes : 540;
+  const hours = Math.floor(safeMins / 60) % 24;
+  const minutes = Math.floor(safeMins % 60);
   return `${String(hours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}`;
 };
 
@@ -22,11 +27,12 @@ export const minutesToTime = (totalMinutes: number): string => {
  * Range A: [startA, endA], Range B: [startB, endB]
  */
 export const areTimesOverlapping = (
-  startA: string,
-  endA: string,
-  startB: string,
-  endB: string
+  startA?: string | null,
+  endA?: string | null,
+  startB?: string | null,
+  endB?: string | null
 ): boolean => {
+  if (!startA || !endA || !startB || !endB) return false;
   const minStartA = timeToMinutes(startA);
   const minEndA = timeToMinutes(endA);
   const minStartB = timeToMinutes(startB);
@@ -40,15 +46,18 @@ export const areTimesOverlapping = (
  * optionally excluding a specific booking ID (useful when editing a booking).
  */
 export const isRoomAvailable = (
-  roomId: string,
-  date: string,
-  startTime: string,
-  endTime: string,
-  bookings: Booking[],
+  roomId?: string | null,
+  date?: string | null,
+  startTime?: string | null,
+  endTime?: string | null,
+  bookings?: Booking[],
   excludeBookingId?: string
 ): boolean => {
+  if (!roomId || !date || !startTime || !endTime || !Array.isArray(bookings)) {
+    return true;
+  }
   const roomBookings = bookings.filter(
-    b => b.roomId === roomId && b.date === date && b.id !== excludeBookingId
+    b => b && b.roomId === roomId && b.date === date && b.id !== excludeBookingId
   );
 
   for (const booking of roomBookings) {
@@ -63,36 +72,41 @@ export const isRoomAvailable = (
 /**
  * Formats a Date object to YYYY-MM-DD string
  */
-export const formatDateToISO = (date: Date): string => {
-  const year = date.getFullYear();
-  const month = String(date.getMonth() + 1).padStart(2, '0');
-  const day = String(date.getDate()).padStart(2, '0');
+export const formatDateToISO = (date?: Date | null): string => {
+  const validDate = (date instanceof Date && !isNaN(date.getTime())) ? date : new Date();
+  const year = validDate.getFullYear();
+  const month = String(validDate.getMonth() + 1).padStart(2, '0');
+  const day = String(validDate.getDate()).padStart(2, '0');
   return `${year}-${month}-${day}`;
 };
 
 /**
  * Parses YYYY-MM-DD into a Date in local time without timezone skew
  */
-export const parseISODate = (dateStr: string): Date => {
-  const [year, month, day] = dateStr.split('-').map(Number);
+export const parseISODate = (dateStr?: string | null): Date => {
+  if (!dateStr || typeof dateStr !== 'string') return new Date();
+  const parts = dateStr.split('-');
+  const year = Number(parts[0]) || new Date().getFullYear();
+  const month = Number(parts[1]) || (new Date().getMonth() + 1);
+  const day = Number(parts[2]) || new Date().getDate();
   return new Date(year, (month || 1) - 1, day || 1);
 };
 
 /**
  * Adds or subtracts days to a YYYY-MM-DD string
  */
-export const addDaysToDate = (dateStr: string, days: number): string => {
+export const addDaysToDate = (dateStr?: string | null, days: number = 0): string => {
   const d = parseISODate(dateStr);
-  d.setDate(d.getDate() + days);
+  d.setDate(d.getDate() + (days || 0));
   return formatDateToISO(d);
 };
 
 /**
  * Adds or subtracts months to a YYYY-MM-DD string
  */
-export const addMonthsToDate = (dateStr: string, months: number): string => {
+export const addMonthsToDate = (dateStr?: string | null, months: number = 0): string => {
   const d = parseISODate(dateStr);
-  d.setMonth(d.getMonth() + months);
+  d.setMonth(d.getMonth() + (months || 0));
   return formatDateToISO(d);
 };
 
@@ -194,7 +208,8 @@ export const getMonthCalendarGrid = (dateStr: string, selectedDateStr?: string):
 /**
  * Formats Month and Year (e.g., "August 2026")
  */
-export const formatMonthYear = (dateStr: string): string => {
+export const formatMonthYear = (dateStr?: string | null): string => {
+  if (!dateStr) return '';
   const d = parseISODate(dateStr);
   return d.toLocaleDateString('en-US', { month: 'long', year: 'numeric' });
 };
@@ -203,7 +218,7 @@ export const formatMonthYear = (dateStr: string): string => {
  * Formats a week range (e.g., "Aug 17 – Aug 23, 2026")
  */
 export const formatWeekRange = (weekDays: WeekDayInfo[]): string => {
-  if (weekDays.length === 0) return '';
+  if (!weekDays || weekDays.length === 0) return '';
   const first = weekDays[0];
   const last = weekDays[weekDays.length - 1];
 
@@ -217,11 +232,11 @@ export const formatWeekRange = (weekDays: WeekDayInfo[]): string => {
   return `${firstMonth} ${first.dayNum} – ${lastMonth} ${last.dayNum}, ${year}`;
 };
 
-
 /**
  * Formats a date string "YYYY-MM-DD" into a friendly display format like "Thursday, Jul 2"
  */
-export const formatFriendlyDate = (dateStr: string): string => {
+export const formatFriendlyDate = (dateStr?: string | null): string => {
+  if (!dateStr) return '';
   const date = parseISODate(dateStr);
   if (isNaN(date.getTime())) return dateStr;
   return date.toLocaleDateString('en-US', {
@@ -234,9 +249,10 @@ export const formatFriendlyDate = (dateStr: string): string => {
 /**
  * Checks if a booking is currently ongoing, in the future, or in the past
  */
-export const getBookingStatus = (booking: Booking): 'past' | 'ongoing' | 'upcoming' => {
+export const getBookingStatus = (booking?: Booking | null): 'past' | 'ongoing' | 'upcoming' => {
+  if (!booking || !booking.date) return 'past';
   const now = new Date();
-  const todayStr = now.toISOString().split('T')[0];
+  const todayStr = formatDateToISO(now);
   const currentTimeMin = now.getHours() * 60 + now.getMinutes();
 
   if (booking.date < todayStr) {

@@ -6,7 +6,7 @@ import {
   Eye, Calendar, ArrowRight
 } from 'lucide-react';
 import { Room, Booking } from '../types';
-import { isRoomAvailable, timeToMinutes } from '../utils';
+import { isRoomAvailable, timeToMinutes, minutesToTime } from '../utils';
 
 interface InteractiveFloorPlanProps {
   rooms: Room[];
@@ -40,10 +40,9 @@ export const InteractiveFloorPlan: React.FC<InteractiveFloorPlanProps> = ({
 
   // Helper to check room availability at selectedTimeHour
   const getRoomLiveStatus = (room: Room, hour: string = selectedTimeHour) => {
-    const startHour = hour;
-    const [hStr, mStr] = startHour.split(':');
-    const nextH = (parseInt(hStr, 10) + 1).toString().padStart(2, '0');
-    const endHour = `${nextH}:${mStr}`;
+    const startHour = hour || selectedTimeHour || '09:00';
+    const startMin = timeToMinutes(startHour);
+    const endHour = minutesToTime(startMin + 60);
 
     const available = isRoomAvailable(room.id, selectedDate, startHour, endHour, bookings);
 

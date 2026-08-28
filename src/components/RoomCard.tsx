@@ -223,12 +223,16 @@ export const RoomCard: React.FC<RoomCardProps> = ({
   const nextSlot = computeNextAvailability();
 
   // Helper to format 24h string into 12-hour AM/PM
-  function formatTime12Hour(timeStr: string): string {
-    if (!timeStr) return '';
-    const [h, m] = timeStr.split(':').map(Number);
-    const period = h >= 12 ? 'PM' : 'AM';
-    const displayH = h % 12 === 0 ? 12 : h % 12;
-    return `${displayH}:${String(m).padStart(2, '0')} ${period}`;
+  function formatTime12Hour(timeStr?: string | null): string {
+    if (!timeStr || typeof timeStr !== 'string') return '';
+    const parts = timeStr.split(':');
+    const h = Number(parts[0]);
+    const m = Number(parts[1]);
+    const validH = isNaN(h) ? 0 : h;
+    const validM = isNaN(m) ? 0 : m;
+    const period = validH >= 12 ? 'PM' : 'AM';
+    const displayH = validH % 12 === 0 ? 12 : validH % 12;
+    return `${displayH}:${String(validM).padStart(2, '0')} ${period}`;
   }
 
   // Helper to resolve icon for room amenities

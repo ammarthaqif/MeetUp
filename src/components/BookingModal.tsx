@@ -26,8 +26,8 @@ interface BookingModalProps {
   room: Room | null;
   rooms: Room[]; // List of all rooms for selection
   selectedDate: string;
-  selectedHour?: string;
-  selectedEndTime?: string;
+  selectedHour?: string | null;
+  selectedEndTime?: string | null;
   onSave: (bookingData: Omit<Booking, 'id' | 'createdAt'> & { id?: string; multiDates?: string[] }) => Promise<void>;
   editingBooking: Booking | null;
   currentUser: { displayName: string | null; email: string | null; uid: string } | null;
@@ -44,7 +44,7 @@ export const BookingModal: React.FC<BookingModalProps> = ({
   room,
   rooms,
   selectedDate,
-  selectedHour = '09:00',
+  selectedHour,
   selectedEndTime,
   onSave,
   editingBooking,
@@ -121,13 +121,14 @@ export const BookingModal: React.FC<BookingModalProps> = ({
         setRepeatDays([]);
         setIncludedDates([editingBooking.date]);
       } else {
+        const defaultStart = selectedHour || '09:00';
         setRoomId(room?.id || rooms[0]?.id || '');
-        setDate(selectedDate);
-        setStartTime(selectedHour);
+        setDate(selectedDate || formatDateToISO(new Date()));
+        setStartTime(defaultStart);
         if (selectedEndTime) {
           setEndTime(selectedEndTime);
         } else {
-          const startMin = timeToMinutes(selectedHour);
+          const startMin = timeToMinutes(defaultStart);
           setEndTime(minutesToTime(startMin + 60));
         }
         setTitle('');

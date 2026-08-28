@@ -105,7 +105,7 @@ export const SimulatedInbox: React.FC<SimulatedInboxProps> = ({ emails, onClear 
                     }`}
                   >
                     <p className="text-[10px] font-bold text-slate-800 truncate" title={email.to}>
-                      To: {email.to.split('@')[0]}
+                      To: {email.to ? email.to.split('@')[0] : 'Staff'}
                     </p>
                     <p className="text-[9px] text-slate-500 font-medium truncate mt-0.5">
                       {email.subject}
