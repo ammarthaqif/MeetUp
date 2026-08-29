@@ -56,6 +56,7 @@ import {
   DEFAULT_MULTI_TENANT_APPROVED_USERS, 
   DEFAULT_MULTI_TENANT_BOOKINGS 
 } from './data/defaultTenants';
+import { broadcastMessage, subscribeToSyncChannel, CLIENT_TAB_ID } from './utils/syncChannel';
 
 const ADMIN_EMAIL = 'ammarthaqif.ar@gmail.com';
 
@@ -92,11 +93,7 @@ const DEFAULT_AUDIT_LOGS: AuditLog[] = [
   }
 ];
 
-// Unique Client Tab ID to prevent self-broadcasting loops in multi-window environments
-const CLIENT_TAB_ID = typeof crypto !== 'undefined' && crypto.randomUUID 
-  ? crypto.randomUUID() 
-  : `tab-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-
+// App Component
 export default function App() {
   const [selectedDate, setSelectedDate] = useState<string>(() => {
     const today = new Date();
@@ -365,15 +362,9 @@ export default function App() {
     } catch {}
   }, [tenantAccessToken]);
 
-  // Safe helper to broadcast updates across windows/tabs
-  const broadcastSync = (type: string, payload: any) => {
-    try {
-      if (typeof BroadcastChannel !== 'undefined') {
-        const channel = new BroadcastChannel('office_sync_channel');
-        channel.postMessage({ type, payload, senderTabId: CLIENT_TAB_ID });
-        channel.close();
-      }
-    } catch {}
+  // Broadcast state changes across windows/tabs using persistent sync channel
+  const broadcastSync = (type: any, payload: any) => {
+    broadcastMessage(type, payload, activeTenant?.id);
   };
 
   useEffect(() => {
@@ -427,33 +418,26 @@ export default function App() {
 
   // Real-Time Cross-Tab / Cross-Window Listener for multi-staff sync
   useEffect(() => {
-    let channel: BroadcastChannel | null = null;
-    try {
-      if (typeof BroadcastChannel !== 'undefined') {
-        channel = new BroadcastChannel('office_sync_channel');
-        channel.onmessage = (event) => {
-          if (!event.data || event.data.senderTabId === CLIENT_TAB_ID) return;
-          const { type, payload } = event.data;
-          if (type === 'SYNC_BOOKINGS' && Array.isArray(payload)) {
-            setBookings(payload);
-          } else if (type === 'SYNC_OFFICES' && Array.isArray(payload)) {
-            setOffices(payload);
-          } else if (type === 'SYNC_ROOMS' && Array.isArray(payload)) {
-            setRooms(payload);
-          } else if (type === 'SYNC_USERS' && Array.isArray(payload)) {
-            setApprovedUsers(payload);
-          } else if (type === 'SYNC_KEYS' && Array.isArray(payload)) {
-            setAccessKeys(payload);
-          } else if (type === 'SYNC_BLOCKED_DATES' && Array.isArray(payload)) {
-            setBlockedDates(payload);
-          } else if (type === 'SYNC_EMAILS' && Array.isArray(payload)) {
-            setSimulatedEmails(payload);
-          } else if (type === 'SYNC_AUDIT_LOGS' && Array.isArray(payload)) {
-            setAuditLogs(payload);
-          }
-        };
+    const unsubChannel = subscribeToSyncChannel((event) => {
+      const { type, payload } = event;
+      if (type === 'SYNC_BOOKINGS' && Array.isArray(payload)) {
+        setBookings(payload);
+      } else if (type === 'SYNC_OFFICES' && Array.isArray(payload)) {
+        setOffices(payload);
+      } else if (type === 'SYNC_ROOMS' && Array.isArray(payload)) {
+        setRooms(payload);
+      } else if (type === 'SYNC_USERS' && Array.isArray(payload)) {
+        setApprovedUsers(payload);
+      } else if (type === 'SYNC_KEYS' && Array.isArray(payload)) {
+        setAccessKeys(payload);
+      } else if (type === 'SYNC_BLOCKED_DATES' && Array.isArray(payload)) {
+        setBlockedDates(payload);
+      } else if (type === 'SYNC_EMAILS' && Array.isArray(payload)) {
+        setSimulatedEmails(payload);
+      } else if (type === 'SYNC_AUDIT_LOGS' && Array.isArray(payload)) {
+        setAuditLogs(payload);
       }
-    } catch {}
+    });
 
     const handleStorage = (e: StorageEvent) => {
       if (!e.newValue || !e.key) return;
@@ -487,9 +471,7 @@ export default function App() {
 
     return () => {
       window.removeEventListener('storage', handleStorage);
-      if (channel) {
-        channel.close();
-      }
+      unsubChannel();
     };
   }, []);
 
@@ -980,88 +962,46 @@ export default function App() {
     }
   }, []);
 
-  // Real-time listen to Bookings (Client-Dedicated Subcollection + Global Sync)
+  // Real-time listen to Bookings (Global Firestore Collection with multi-tenant support)
   useEffect(() => {
     if (!db) return;
-    const unsubscribes: (() => void)[] = [];
 
-    const handleBookingSnapshot = (snapshot: any, isClientDedicatedSubcollection: boolean) => {
-      const bookingList: Booking[] = [];
-      snapshot.forEach((docSnap: any) => {
-        const data = docSnap.data();
-        bookingList.push({ ...data, id: docSnap.id } as Booking);
-      });
-
-      setBookings(prev => {
-        const map = new Map<string, Booking>();
-        // Base seed from defaults for other tenants
-        DEFAULT_MULTI_TENANT_BOOKINGS.forEach(b => map.set(b.id, b));
-        prev.forEach(b => map.set(b.id, b));
-
-        if (isClientDedicatedSubcollection && activeTenant) {
-          // Client-specific database snapshot: Authoritative state for this tenant
-          const incomingIds = new Set(bookingList.map(b => b.id));
-          // Remove tenant bookings that are no longer in this client's database snapshot
-          if (!snapshot.empty) {
-            for (const [id, b] of map.entries()) {
-              if (b.tenantId === activeTenant.id && !incomingIds.has(id)) {
-                map.delete(id);
-              }
-            }
-          }
-        }
-
-        // Apply incoming bookings
-        bookingList.forEach(b => map.set(b.id, b));
-
-        const merged = Array.from(map.values()).sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
-        try {
-          localStorage.setItem('office_sync_bookings', JSON.stringify(merged));
-        } catch {}
-        return merged;
-      });
-    };
-
-    // 1. Client Dedicated Database: tenants/{tenantId}/bookings
-    if (activeTenant?.id) {
-      try {
-        const tenantBookingsColl = collection(db, 'tenants', activeTenant.id, 'bookings');
-        const unsubTenant = onSnapshot(tenantBookingsColl, (snapshot) => {
-          handleBookingSnapshot(snapshot, true);
-
-          // Seed default company bookings if this tenant database subcollection is newly created
-          if (snapshot.empty) {
-            const defaults = DEFAULT_MULTI_TENANT_BOOKINGS.filter(b => b.tenantId === activeTenant.id);
-            defaults.forEach(b => {
-              setDoc(doc(db, 'tenants', activeTenant.id, 'bookings', b.id), b, { merge: true }).catch(() => {});
-            });
-          }
-        }, (error) => {
-          console.warn(`Operating in offline cache mode for client DB (tenants/${activeTenant.id}/bookings):`, error.message);
-        });
-        unsubscribes.push(unsubTenant);
-      } catch (e) {
-        console.warn('Client bookings listener error:', e);
-      }
-    }
-
-    // 2. Global Bookings Collection: /bookings (Fallback & Cross-Index)
     try {
       const globalBookingsColl = collection(db, 'bookings');
-      const unsubGlobal = onSnapshot(globalBookingsColl, (snapshot) => {
-        handleBookingSnapshot(snapshot, false);
+      const unsubscribe = onSnapshot(globalBookingsColl, (snapshot) => {
+        if (snapshot.empty) {
+          // Initialize defaults into Firestore so all staff and windows share the same database
+          DEFAULT_MULTI_TENANT_BOOKINGS.forEach(b => {
+            setDoc(doc(db, 'bookings', b.id), b, { merge: true }).catch(() => {});
+            if (b.tenantId) {
+              setDoc(doc(db, 'tenants', b.tenantId, 'bookings', b.id), b, { merge: true }).catch(() => {});
+            }
+          });
+          return;
+        }
+
+        const bookingList: Booking[] = [];
+        snapshot.forEach((docSnap) => {
+          const data = docSnap.data();
+          bookingList.push({ ...data, id: docSnap.id } as Booking);
+        });
+
+        // Sort chronologically by creation/update
+        bookingList.sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
+
+        setBookings(bookingList);
+        try {
+          localStorage.setItem('office_sync_bookings', JSON.stringify(bookingList));
+        } catch {}
       }, (error) => {
         console.warn('Operating in offline local cache mode for global bookings:', error.message);
       });
-      unsubscribes.push(unsubGlobal);
+
+      return () => unsubscribe();
     } catch (e) {
       console.warn('Firestore global bookings fallback:', e);
     }
-
-    return () => {
-      unsubscribes.forEach(unsub => unsub());
-    };
-  }, [activeTenant?.id]);
+  }, []);
 
   // Real-time listen to Approved Users
   useEffect(() => {
@@ -1399,13 +1339,14 @@ export default function App() {
         return Math.max(startMin, bStart) < Math.min(endMin, bEnd);
       });
 
-      // Query live database collection directly to guard against simultaneous submissions
+      // Query live database collections directly to guard against simultaneous submissions
       if (!conflictingBooking && db) {
         try {
-          const tenantBookingsColl = collection(db, 'tenants', resolvedTenantId, 'bookings');
-          const q = query(tenantBookingsColl, where('roomId', '==', bookingData.roomId), where('date', '==', d));
-          const snap = await getDocs(q);
-          snap.forEach(docSnap => {
+          // 1. Check global bookings collection
+          const globalBookingsColl = collection(db, 'bookings');
+          const qGlobal = query(globalBookingsColl, where('roomId', '==', bookingData.roomId), where('date', '==', d));
+          const snapGlobal = await getDocs(qGlobal);
+          snapGlobal.forEach(docSnap => {
             if (conflictingBooking) return;
             const b = { ...docSnap.data(), id: docSnap.id } as Booking;
             if (bookingData.id && b.id === bookingData.id) return;
@@ -1415,6 +1356,23 @@ export default function App() {
               conflictingBooking = b;
             }
           });
+
+          // 2. Also check tenant-dedicated subcollection
+          if (!conflictingBooking && resolvedTenantId) {
+            const tenantBookingsColl = collection(db, 'tenants', resolvedTenantId, 'bookings');
+            const qTenant = query(tenantBookingsColl, where('roomId', '==', bookingData.roomId), where('date', '==', d));
+            const snapTenant = await getDocs(qTenant);
+            snapTenant.forEach(docSnap => {
+              if (conflictingBooking) return;
+              const b = { ...docSnap.data(), id: docSnap.id } as Booking;
+              if (bookingData.id && b.id === bookingData.id) return;
+              const bStart = timeToMinutes(b.startTime);
+              const bEnd = timeToMinutes(b.endTime);
+              if (Math.max(startMin, bStart) < Math.min(endMin, bEnd)) {
+                conflictingBooking = b;
+              }
+            });
+          }
         } catch (err) {
           console.warn('Real-time live conflict query fallback:', err);
         }
@@ -1459,11 +1417,13 @@ export default function App() {
         try {
           if (db) {
             // Write to client-dedicated database collection
-            setDoc(doc(db, 'tenants', resolvedTenantId, 'bookings', docPayload.id), docPayload, { merge: true }).catch(() => {});
+            await setDoc(doc(db, 'tenants', resolvedTenantId, 'bookings', docPayload.id), docPayload, { merge: true });
             // Write to global collection
-            setDoc(doc(db, 'bookings', docPayload.id), docPayload, { merge: true }).catch(() => {});
+            await setDoc(doc(db, 'bookings', docPayload.id), docPayload, { merge: true });
           }
-        } catch {}
+        } catch (err) {
+          console.warn('Firestore booking series write warning:', err);
+        }
 
         // Audit Trail
         logActivity({
@@ -1480,7 +1440,14 @@ export default function App() {
         });
       }
 
-      setBookings(prev => [...createdBookings, ...prev]);
+      setBookings(prev => {
+        const next = [...createdBookings, ...prev];
+        try {
+          localStorage.setItem('office_sync_bookings', JSON.stringify(next));
+          broadcastSync('SYNC_BOOKINGS', next);
+        } catch {}
+        return next;
+      });
 
       const dateSpanLabel = `${bookingData.multiDates[0]} to ${bookingData.multiDates[bookingData.multiDates.length - 1]}`;
       const newEmail: SimulatedEmail = {
@@ -1544,14 +1511,24 @@ export default function App() {
           }
         }
 
-        setBookings(prev => prev.map(b => b.id === bookingData.id ? { ...b, ...docPayload } : b));
+        setBookings(prev => {
+          const next = prev.map(b => b.id === bookingData.id ? { ...b, ...docPayload } : b);
+          try {
+            localStorage.setItem('office_sync_bookings', JSON.stringify(next));
+            broadcastSync('SYNC_BOOKINGS', next);
+          } catch {}
+          return next;
+        });
+
         try {
           if (db) {
             // Dual write update
-            setDoc(doc(db, 'tenants', resolvedTenantId, 'bookings', bookingData.id), docPayload, { merge: true }).catch(() => {});
-            setDoc(doc(db, 'bookings', bookingData.id), docPayload, { merge: true }).catch(() => {});
+            await setDoc(doc(db, 'tenants', resolvedTenantId, 'bookings', bookingData.id), docPayload, { merge: true });
+            await setDoc(doc(db, 'bookings', bookingData.id), docPayload, { merge: true });
           }
-        } catch {}
+        } catch (err) {
+          console.warn('Firestore update warning:', err);
+        }
 
         logActivity({
           action: 'BOOKING_UPDATED',
@@ -1588,14 +1565,24 @@ export default function App() {
         setSimulatedEmails(prev => [editEmail, ...prev]);
         showNotification('success', 'Meeting room reservation updated successfully.');
       } else {
-        setBookings(prev => [docPayload, ...prev]);
+        setBookings(prev => {
+          const next = [docPayload, ...prev];
+          try {
+            localStorage.setItem('office_sync_bookings', JSON.stringify(next));
+            broadcastSync('SYNC_BOOKINGS', next);
+          } catch {}
+          return next;
+        });
+
         try {
           if (db) {
             // Dual write create
-            setDoc(doc(db, 'tenants', resolvedTenantId, 'bookings', docPayload.id), docPayload, { merge: true }).catch(() => {});
-            setDoc(doc(db, 'bookings', docPayload.id), docPayload, { merge: true }).catch(() => {});
+            await setDoc(doc(db, 'tenants', resolvedTenantId, 'bookings', docPayload.id), docPayload, { merge: true });
+            await setDoc(doc(db, 'bookings', docPayload.id), docPayload, { merge: true });
           }
-        } catch {}
+        } catch (err) {
+          console.warn('Firestore create booking warning:', err);
+        }
 
         logActivity({
           action: 'BOOKING_CREATED',
@@ -1650,22 +1637,27 @@ export default function App() {
       return;
     }
 
-    if (!window.confirm(`Are you sure you want to cancel the reservation for "${booking.title}"?`)) {
-      return;
-    }
-
     const room = rooms.find(r => r.id === booking.roomId);
     const resolvedTenantId = booking.tenantId || activeTenant?.id || 'tenant-acme';
 
-    setBookings(prev => prev.filter(b => b.id !== bookingId));
+    setBookings(prev => {
+      const next = prev.filter(b => b.id !== bookingId);
+      try {
+        localStorage.setItem('office_sync_bookings', JSON.stringify(next));
+        broadcastSync('SYNC_BOOKINGS', next);
+      } catch {}
+      return next;
+    });
 
     try {
       if (db) {
         // Dual delete
-        deleteDoc(doc(db, 'tenants', resolvedTenantId, 'bookings', bookingId)).catch(() => {});
-        deleteDoc(doc(db, 'bookings', bookingId)).catch(() => {});
+        await deleteDoc(doc(db, 'tenants', resolvedTenantId, 'bookings', bookingId));
+        await deleteDoc(doc(db, 'bookings', bookingId));
       }
-    } catch {}
+    } catch (err) {
+      console.warn('Firestore delete warning:', err);
+    }
 
     logActivity({
       action: 'BOOKING_CANCELLED',
@@ -2925,7 +2917,7 @@ export default function App() {
         onSave={handleSaveBooking}
         editingBooking={editingBooking}
         currentUser={user ? { displayName: user.displayName, email: user.email, uid: user.uid } : null}
-        bookings={currentOfficeBookings}
+        bookings={bookings}
         googleSyncAvailable={!!googleToken}
         adminEmail={ADMIN_EMAIL}
         blockedDates={blockedDates}
@@ -2937,7 +2929,7 @@ export default function App() {
         isOpen={isRoomFinderOpen}
         onClose={() => setIsRoomFinderOpen(false)}
         rooms={currentOfficeRooms}
-        bookings={currentOfficeBookings}
+        bookings={bookings}
         currentFloor={selectedFloor}
         initialDate={selectedDate}
         onProceedWithBooking={handleProceedWithBookingFromFinder}

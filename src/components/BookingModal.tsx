@@ -544,10 +544,6 @@ export const BookingModal: React.FC<BookingModalProps> = ({
       }
     }
 
-    if (!window.confirm(confirmMessage)) {
-      return;
-    }
-
     setIsSaving(true);
     try {
       await onSave({
