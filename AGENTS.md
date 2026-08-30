@@ -24,3 +24,14 @@
 ### 3. Holiday and Leave Management
 - Public Holidays and Replacement Leaves can be imported via `.ics` or configured manually.
 - Hard block holidays prevent room reservations on locked dates.
+
+### 4. Booking Modal Execution & Infinite Processing Loop Prevention
+- **Resilient Non-Blocking Cloud Persistence**:
+  - `handleSaveBooking` and `handleCancelBooking` must NEVER allow backend network latency, slow proxies, or Firestore connection timeouts to freeze the UI or block the client.
+  - **Optimistic State Updates**: Local React state, `localStorage`, and `BroadcastChannel` are updated immediately (0ms lag), giving users instantaneous confirmation.
+  - **Timeout-Guarded Conflict Pre-Flight**: Live Firestore query checks use `Promise.race` with a maximum 1.2s timeout fallback to the synchronized in-memory state.
+  - **Background Persistence**: Cloud Firestore mutations (`setDoc`, `deleteDoc`) are executed in parallel (`Promise.allSettled`) with non-blocking timeout wrappers (2.5s max).
+- **Modal Submission State Guarantee**:
+  - In `BookingModal`, `isSaving` must always be protected with a hard safety timer (4.5s max) and wrapped inside a strict `try / catch / finally` block.
+  - Whenever the modal opens, closes, or catches an exception, `isSaving` is forcefully reset to `false`.
+  - The submit button must NEVER remain stuck in a "Processing..." infinite loop under any network condition.

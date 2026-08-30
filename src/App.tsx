@@ -1329,8 +1329,9 @@ export default function App() {
       ? bookingData.multiDates
       : [bookingData.date];
 
+    // 1. Fast, synchronized in-memory conflict check
     for (const d of datesToCheck) {
-      let conflictingBooking = bookings.find(b => {
+      const conflictingBooking = bookings.find(b => {
         if (bookingData.id && b.id === bookingData.id) return false;
         if (b.roomId !== bookingData.roomId) return false;
         if (b.date !== d) return false;
@@ -1338,45 +1339,6 @@ export default function App() {
         const bEnd = timeToMinutes(b.endTime);
         return Math.max(startMin, bStart) < Math.min(endMin, bEnd);
       });
-
-      // Query live database collections directly to guard against simultaneous submissions
-      if (!conflictingBooking && db) {
-        try {
-          // 1. Check global bookings collection
-          const globalBookingsColl = collection(db, 'bookings');
-          const qGlobal = query(globalBookingsColl, where('roomId', '==', bookingData.roomId), where('date', '==', d));
-          const snapGlobal = await getDocs(qGlobal);
-          snapGlobal.forEach(docSnap => {
-            if (conflictingBooking) return;
-            const b = { ...docSnap.data(), id: docSnap.id } as Booking;
-            if (bookingData.id && b.id === bookingData.id) return;
-            const bStart = timeToMinutes(b.startTime);
-            const bEnd = timeToMinutes(b.endTime);
-            if (Math.max(startMin, bStart) < Math.min(endMin, bEnd)) {
-              conflictingBooking = b;
-            }
-          });
-
-          // 2. Also check tenant-dedicated subcollection
-          if (!conflictingBooking && resolvedTenantId) {
-            const tenantBookingsColl = collection(db, 'tenants', resolvedTenantId, 'bookings');
-            const qTenant = query(tenantBookingsColl, where('roomId', '==', bookingData.roomId), where('date', '==', d));
-            const snapTenant = await getDocs(qTenant);
-            snapTenant.forEach(docSnap => {
-              if (conflictingBooking) return;
-              const b = { ...docSnap.data(), id: docSnap.id } as Booking;
-              if (bookingData.id && b.id === bookingData.id) return;
-              const bStart = timeToMinutes(b.startTime);
-              const bEnd = timeToMinutes(b.endTime);
-              if (Math.max(startMin, bStart) < Math.min(endMin, bEnd)) {
-                conflictingBooking = b;
-              }
-            });
-          }
-        } catch (err) {
-          console.warn('Real-time live conflict query fallback:', err);
-        }
-      }
 
       if (conflictingBooking) {
         const hostLabel = conflictingBooking.hostName 
@@ -1387,6 +1349,71 @@ export default function App() {
         throw new Error(conflictMsg);
       }
     }
+
+    // 2. Direct Live Cloud Firestore Verification (with fast 1.2s timeout guard to prevent UI freeze)
+    if (db) {
+      try {
+        const liveConflictPromises = datesToCheck.map(async (d) => {
+          try {
+            const qGlobal = query(collection(db, 'bookings'), where('roomId', '==', bookingData.roomId), where('date', '==', d));
+            const snap = await Promise.race([
+              getDocs(qGlobal),
+              new Promise<null>((resolve) => setTimeout(() => resolve(null), 1200))
+            ]);
+            if (snap && snap.docs) {
+              for (const docSnap of snap.docs) {
+                const b = { ...docSnap.data(), id: docSnap.id } as Booking;
+                if (bookingData.id && b.id === bookingData.id) continue;
+                const bStart = timeToMinutes(b.startTime);
+                const bEnd = timeToMinutes(b.endTime);
+                if (Math.max(startMin, bStart) < Math.min(endMin, bEnd)) {
+                  return { date: d, booking: b };
+                }
+              }
+            }
+          } catch (e) {
+            console.warn('Live conflict check warning for date:', d, e);
+          }
+          return null;
+        });
+
+        const liveConflicts = await Promise.all(liveConflictPromises);
+        const liveConflict = liveConflicts.find(c => c !== null);
+        if (liveConflict) {
+          const conflicting = liveConflict.booking;
+          const hostLabel = conflicting.hostName 
+            ? `${conflicting.hostName} (${conflicting.hostEmail})` 
+            : conflicting.hostEmail;
+          const conflictMsg = `⚠️ Real-Time Conflict Blocked: "${room.name}" (Lvl ${room.floor}) is already reserved on ${liveConflict.date} (${conflicting.startTime} - ${conflicting.endTime}) by ${hostLabel} for "${conflicting.title}". Double booking has been prevented. Please pick another time slot or room.`;
+          showNotification('error', conflictMsg);
+          throw new Error(conflictMsg);
+        }
+      } catch (err: any) {
+        if (err.message && err.message.includes('Real-Time Conflict Blocked')) {
+          throw err;
+        }
+        console.warn('Live Firestore conflict check bypassed due to network/timeout:', err);
+      }
+    }
+
+    // Helper for safe non-blocking Firestore write with timeout
+    const persistBookingsSafely = (items: Booking[]) => {
+      if (!db) return;
+      try {
+        const writePromises = items.flatMap(b => [
+          setDoc(doc(db, 'bookings', b.id), b, { merge: true }),
+          setDoc(doc(db, 'tenants', b.tenantId || resolvedTenantId, 'bookings', b.id), b, { merge: true })
+        ]);
+        Promise.race([
+          Promise.allSettled(writePromises),
+          new Promise((resolve) => setTimeout(resolve, 2500))
+        ]).catch(err => {
+          console.warn('Background Firestore persistence note:', err);
+        });
+      } catch (e) {
+        console.warn('Firestore write init note:', e);
+      }
+    };
 
     // Handle Multi-day recurring saves
     if (bookingData.multiDates && bookingData.multiDates.length > 0) {
@@ -1414,17 +1441,6 @@ export default function App() {
         };
         createdBookings.push(docPayload);
 
-        try {
-          if (db) {
-            // Write to client-dedicated database collection
-            await setDoc(doc(db, 'tenants', resolvedTenantId, 'bookings', docPayload.id), docPayload, { merge: true });
-            // Write to global collection
-            await setDoc(doc(db, 'bookings', docPayload.id), docPayload, { merge: true });
-          }
-        } catch (err) {
-          console.warn('Firestore booking series write warning:', err);
-        }
-
         // Audit Trail
         logActivity({
           action: 'BOOKING_CREATED',
@@ -1440,6 +1456,7 @@ export default function App() {
         });
       }
 
+      // Optimistic instant state update (0ms lag)
       setBookings(prev => {
         const next = [...createdBookings, ...prev];
         try {
@@ -1448,6 +1465,9 @@ export default function App() {
         } catch {}
         return next;
       });
+
+      // Background Firestore persistence
+      persistBookingsSafely(createdBookings);
 
       const dateSpanLabel = `${bookingData.multiDates[0]} to ${bookingData.multiDates[bookingData.multiDates.length - 1]}`;
       const newEmail: SimulatedEmail = {
@@ -1511,6 +1531,7 @@ export default function App() {
           }
         }
 
+        // Optimistic instant state update
         setBookings(prev => {
           const next = prev.map(b => b.id === bookingData.id ? { ...b, ...docPayload } : b);
           try {
@@ -1520,15 +1541,8 @@ export default function App() {
           return next;
         });
 
-        try {
-          if (db) {
-            // Dual write update
-            await setDoc(doc(db, 'tenants', resolvedTenantId, 'bookings', bookingData.id), docPayload, { merge: true });
-            await setDoc(doc(db, 'bookings', bookingData.id), docPayload, { merge: true });
-          }
-        } catch (err) {
-          console.warn('Firestore update warning:', err);
-        }
+        // Background persistence
+        persistBookingsSafely([docPayload]);
 
         logActivity({
           action: 'BOOKING_UPDATED',
@@ -1565,6 +1579,7 @@ export default function App() {
         setSimulatedEmails(prev => [editEmail, ...prev]);
         showNotification('success', 'Meeting room reservation updated successfully.');
       } else {
+        // Optimistic instant state update
         setBookings(prev => {
           const next = [docPayload, ...prev];
           try {
@@ -1574,15 +1589,8 @@ export default function App() {
           return next;
         });
 
-        try {
-          if (db) {
-            // Dual write create
-            await setDoc(doc(db, 'tenants', resolvedTenantId, 'bookings', docPayload.id), docPayload, { merge: true });
-            await setDoc(doc(db, 'bookings', docPayload.id), docPayload, { merge: true });
-          }
-        } catch (err) {
-          console.warn('Firestore create booking warning:', err);
-        }
+        // Background persistence
+        persistBookingsSafely([docPayload]);
 
         logActivity({
           action: 'BOOKING_CREATED',

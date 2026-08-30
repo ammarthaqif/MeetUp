@@ -102,6 +102,7 @@ export const BookingModal: React.FC<BookingModalProps> = ({
   // Initialize values when modal opens or inputs change
   useEffect(() => {
     if (isOpen) {
+      setIsSaving(false);
       if (editingBooking) {
         setRoomId(editingBooking.roomId);
         setDate(editingBooking.date);
@@ -149,6 +150,8 @@ export const BookingModal: React.FC<BookingModalProps> = ({
         setRecurrenceEndDate(addMonthsToDate(selectedDate, 1));
         setIncludedDates([selectedDate]);
       }
+    } else {
+      setIsSaving(false);
     }
   }, [isOpen, room, selectedDate, selectedHour, selectedEndTime, editingBooking, currentUser, rooms, googleSyncAvailable]);
 
@@ -545,6 +548,16 @@ export const BookingModal: React.FC<BookingModalProps> = ({
     }
 
     setIsSaving(true);
+    let isCompleted = false;
+
+    // Safety timeout timer: strictly terminate spinner if network hangs
+    const safetyTimer = setTimeout(() => {
+      if (!isCompleted) {
+        setIsSaving(false);
+        setErrorMessage('Booking request took longer than expected. Please check your calendar or try clicking Book again.');
+      }
+    }, 4500);
+
     try {
       await onSave({
         id: editingBooking?.id,
@@ -563,11 +576,19 @@ export const BookingModal: React.FC<BookingModalProps> = ({
         googleEventId: syncGoogle ? editingBooking?.googleEventId : undefined,
         multiDates,
       });
+      isCompleted = true;
+      clearTimeout(safetyTimer);
+      setIsSaving(false);
       onClose();
     } catch (err: any) {
+      isCompleted = true;
+      clearTimeout(safetyTimer);
+      setIsSaving(false);
       console.error('Failed to save booking:', err);
       setErrorMessage(err.message || 'An error occurred while saving the booking.');
     } finally {
+      isCompleted = true;
+      clearTimeout(safetyTimer);
       setIsSaving(false);
     }
   };
