@@ -491,3 +491,36 @@ export const generateRecurringDates = (config: RecurrenceConfig): string[] => {
 
   return Array.from(new Set(resultDates)).sort();
 };
+
+/**
+ * Sanitizes a Booking object for Firebase Firestore storage.
+ * Strictly strips or replaces all `undefined` values to prevent Firestore serialization crashes
+ * and guarantees that writes to global and tenant subcollections never fail silently.
+ */
+export const cleanBookingForFirestore = (b: Partial<Booking> & { id: string }): Record<string, any> => {
+  const payload: Record<string, any> = {
+    id: b.id,
+    tenantId: b.tenantId || 'tenant-acme',
+    roomId: b.roomId || '',
+    floor: typeof b.floor === 'number' ? b.floor : 1,
+    officeId: b.officeId || '',
+    title: (b.title || '').trim() || 'Meeting Reservation',
+    description: (b.description || '').trim(),
+    date: b.date || formatDateToISO(new Date()),
+    startTime: b.startTime || '09:00',
+    endTime: b.endTime || '10:00',
+    hostName: (b.hostName || '').trim() || 'Staff Member',
+    hostEmail: (b.hostEmail || '').trim() || 'staff@company-workspace.com',
+    hostUid: b.hostUid || 'guest-staff',
+    attendees: Array.isArray(b.attendees) ? b.attendees.filter(Boolean) : [],
+    outlookSynced: !!b.outlookSynced,
+    createdAt: typeof b.createdAt === 'number' ? b.createdAt : Date.now(),
+  };
+
+  if (b.googleEventId && typeof b.googleEventId === 'string' && b.googleEventId.trim()) {
+    payload.googleEventId = b.googleEventId.trim();
+  }
+
+  return payload;
+};
+

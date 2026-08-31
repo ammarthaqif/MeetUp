@@ -35,3 +35,16 @@
   - In `BookingModal`, `isSaving` must always be protected with a hard safety timer (4.5s max) and wrapped inside a strict `try / catch / finally` block.
   - Whenever the modal opens, closes, or catches an exception, `isSaving` is forcefully reset to `false`.
   - The submit button must NEVER remain stuck in a "Processing..." infinite loop under any network condition.
+
+### 5. Cross-Staff Real-Time Visibility & Firestore Serialization Guarantee
+- **Mandatory Firestore Payload Sanitization**:
+  - Firestore JavaScript SDK strictly throws an unhandled exception `Function setDoc() called with invalid data. Unsupported field value: undefined` if ANY field in an object is `undefined` (e.g. `googleEventId`, `hostUid`, `description`).
+  - ALL writes to Firestore (`handleSaveBooking`, `handleImportBookingsFromExcel`, default seeding) MUST run through `cleanBookingForFirestore()`.
+  - `cleanBookingForFirestore()` strips or provides safe defaults for all undefined fields so persistence is guaranteed never to fail silently.
+- **Dual Real-Time Cloud Listeners**:
+  - Applications run parallel `onSnapshot` listeners on both the global `/bookings` collection AND the tenant-specific subcollection `/tenants/{tenantId}/bookings`.
+  - Any booking created, updated, or imported by one staff member is instantly reflected across all other staff dashboards, browsers, and devices.
+  - Multi-tab and multi-window sync runs in parallel via `BroadcastChannel('office_sync_channel')` and `localStorage` storage events.
+- **Room-ID Cross-Office Visibility**:
+  - `currentOfficeBookings` ensures that any booking matching an active office room (`currentOfficeRoomIds.has(b.roomId)`) or tenant hierarchy is rendered immediately on the timeline, calendar grids, floor plan, and utilization dashboards.
+

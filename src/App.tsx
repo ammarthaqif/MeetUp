@@ -31,7 +31,7 @@ import { TenantSwitcherModal } from './components/TenantSwitcherModal';
 
 // Types and Utilities
 import { Booking, Room, Office, ApprovedUser, AccessKey, AuditLog, AuditActionType, Tenant, TenantRole, BlockedDate } from './types';
-import { formatFriendlyDate, timeToMinutes } from './utils';
+import { formatFriendlyDate, timeToMinutes, cleanBookingForFirestore } from './utils';
 import { DEFAULT_SEED_BLOCKED_DATES } from './utils/icsHolidayParser';
 import { 
   generateSecureToken, 
@@ -972,9 +972,10 @@ export default function App() {
         if (snapshot.empty) {
           // Initialize defaults into Firestore so all staff and windows share the same database
           DEFAULT_MULTI_TENANT_BOOKINGS.forEach(b => {
-            setDoc(doc(db, 'bookings', b.id), b, { merge: true }).catch(() => {});
+            const clean = cleanBookingForFirestore(b);
+            setDoc(doc(db, 'bookings', b.id), clean, { merge: true }).catch(() => {});
             if (b.tenantId) {
-              setDoc(doc(db, 'tenants', b.tenantId, 'bookings', b.id), b, { merge: true }).catch(() => {});
+              setDoc(doc(db, 'tenants', b.tenantId, 'bookings', b.id), clean, { merge: true }).catch(() => {});
             }
           });
           return;
@@ -989,10 +990,23 @@ export default function App() {
         // Sort chronologically by creation/update
         bookingList.sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
 
-        setBookings(bookingList);
-        try {
-          localStorage.setItem('office_sync_bookings', JSON.stringify(bookingList));
-        } catch {}
+        setBookings(prev => {
+          const map = new Map<string, Booking>();
+          // Retain recent in-flight optimistic bookings (within last 3 seconds)
+          const now = Date.now();
+          prev.forEach(b => {
+            if (b.createdAt && (now - b.createdAt < 3000)) {
+              map.set(b.id, b);
+            }
+          });
+          bookingList.forEach(b => map.set(b.id, b));
+          const merged = Array.from(map.values()).sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
+          try {
+            localStorage.setItem('office_sync_bookings', JSON.stringify(merged));
+            broadcastSync('SYNC_BOOKINGS', merged);
+          } catch {}
+          return merged;
+        });
       }, (error) => {
         console.warn('Operating in offline local cache mode for global bookings:', error.message);
       });
@@ -1002,6 +1016,41 @@ export default function App() {
       console.warn('Firestore global bookings fallback:', e);
     }
   }, []);
+
+  // Real-time listen to Tenant-Specific Bookings Subcollection (merges tenant-dedicated records seamlessly)
+  useEffect(() => {
+    if (!db || !activeTenant?.id) return;
+
+    try {
+      const tenantBookingsColl = collection(db, 'tenants', activeTenant.id, 'bookings');
+      const unsubscribe = onSnapshot(tenantBookingsColl, (snapshot) => {
+        if (snapshot.empty) return;
+        const tenantBookingsList: Booking[] = [];
+        snapshot.forEach((docSnap) => {
+          const data = docSnap.data();
+          tenantBookingsList.push({ ...data, id: docSnap.id } as Booking);
+        });
+
+        setBookings(prev => {
+          const map = new Map<string, Booking>();
+          prev.forEach(b => map.set(b.id, b));
+          tenantBookingsList.forEach(b => map.set(b.id, b));
+          const merged = Array.from(map.values()).sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
+          try {
+            localStorage.setItem('office_sync_bookings', JSON.stringify(merged));
+            broadcastSync('SYNC_BOOKINGS', merged);
+          } catch {}
+          return merged;
+        });
+      }, (error) => {
+        console.warn('Tenant bookings listener warning:', error.message);
+      });
+
+      return () => unsubscribe();
+    } catch (e) {
+      console.warn('Firestore tenant bookings fallback:', e);
+    }
+  }, [activeTenant?.id]);
 
   // Real-time listen to Approved Users
   useEffect(() => {
@@ -1396,14 +1445,18 @@ export default function App() {
       }
     }
 
-    // Helper for safe non-blocking Firestore write with timeout
+    // Helper for safe non-blocking Firestore write with timeout and mandatory sanitization
     const persistBookingsSafely = (items: Booking[]) => {
       if (!db) return;
       try {
-        const writePromises = items.flatMap(b => [
-          setDoc(doc(db, 'bookings', b.id), b, { merge: true }),
-          setDoc(doc(db, 'tenants', b.tenantId || resolvedTenantId, 'bookings', b.id), b, { merge: true })
-        ]);
+        const writePromises = items.flatMap(b => {
+          const clean = cleanBookingForFirestore(b);
+          const tId = b.tenantId || resolvedTenantId || 'tenant-acme';
+          return [
+            setDoc(doc(db, 'bookings', b.id), clean, { merge: true }),
+            setDoc(doc(db, 'tenants', tId, 'bookings', b.id), clean, { merge: true })
+          ];
+        });
         Promise.race([
           Promise.allSettled(writePromises),
           new Promise((resolve) => setTimeout(resolve, 2500))
@@ -2173,8 +2226,9 @@ export default function App() {
       if (db) {
         for (const b of importedBookings) {
           const tenantKey = b.tenantId || activeTenant?.id || 'tenant-acme';
-          setDoc(doc(db, 'tenants', tenantKey, 'bookings', b.id), b, { merge: true }).catch(() => {});
-          setDoc(doc(db, 'bookings', b.id), b, { merge: true }).catch(() => {});
+          const clean = cleanBookingForFirestore(b);
+          setDoc(doc(db, 'tenants', tenantKey, 'bookings', b.id), clean, { merge: true }).catch(() => {});
+          setDoc(doc(db, 'bookings', b.id), clean, { merge: true }).catch(() => {});
         }
       }
     } catch (err) {
