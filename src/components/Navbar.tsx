@@ -1,7 +1,7 @@
 import React from 'react';
-import { LogOut, ShieldCheck, Building2, ChevronDown } from 'lucide-react';
+import { LogOut, ShieldCheck, Building2, ChevronDown, Users } from 'lucide-react';
 import { User as FirebaseUser } from 'firebase/auth';
-import { Office, Tenant } from '../types';
+import { Office, Tenant, ActivePresenceUser } from '../types';
 
 interface NavbarProps {
   user: FirebaseUser | null;
@@ -20,6 +20,8 @@ interface NavbarProps {
   onExitAdminMode?: () => void;
   onOpenRoomFinder?: () => void;
   adminEmail?: string;
+  activeUsers?: ActivePresenceUser[];
+  onOpenActiveUsers?: () => void;
 }
 
 export const Navbar: React.FC<NavbarProps> = ({
@@ -39,8 +41,16 @@ export const Navbar: React.FC<NavbarProps> = ({
   onExitAdminMode,
   onOpenRoomFinder,
   adminEmail = 'admin@enterprise.internal',
+  activeUsers = [],
+  onOpenActiveUsers,
 }) => {
   const hasAdminRights = isMasterAdmin || isFocalAdmin;
+
+  // Filter active users for current tenant or overall
+  const tenantActiveUsers = activeTenant 
+    ? activeUsers.filter(u => u.tenantId === activeTenant.id)
+    : activeUsers;
+
 
   return (
     <header id="app-header" className="bg-white border-b border-slate-200 sticky top-0 z-40 shadow-xs">
@@ -117,9 +127,53 @@ export const Navbar: React.FC<NavbarProps> = ({
           )}
         </div>
 
-        {/* Right: Actions & User Status */}
+        {/* Right: Actions, Live Active Staff & User Status */}
         <div className="flex items-center gap-2 sm:gap-3 shrink-0">
           
+          {/* Active Staff Presence Pill */}
+          {onOpenActiveUsers && (
+            <button
+              onClick={onOpenActiveUsers}
+              className="flex items-center gap-1.5 sm:gap-2 px-2.5 py-1.5 bg-emerald-50/90 hover:bg-emerald-100 border border-emerald-200/90 rounded-xl transition-all cursor-pointer shadow-2xs group"
+              title="View Active Staff & Live Concurrent Sessions"
+            >
+              <span className="relative flex h-2 w-2">
+                <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
+                <span className="relative inline-flex rounded-full h-2 w-2 bg-emerald-500"></span>
+              </span>
+              
+              {/* Stacked avatars preview if available */}
+              {tenantActiveUsers.length > 0 && (
+                <div className="flex -space-x-1.5 overflow-hidden">
+                  {tenantActiveUsers.slice(0, 3).map((u, i) => (
+                    u.photoURL ? (
+                      <img 
+                        key={u.id || i} 
+                        src={u.photoURL} 
+                        alt={u.displayName} 
+                        className="inline-block h-4.5 w-4.5 rounded-full ring-1.5 ring-white object-cover" 
+                        referrerPolicy="no-referrer"
+                      />
+                    ) : (
+                      <div 
+                        key={u.id || i} 
+                        className="inline-flex h-4.5 w-4.5 items-center justify-center rounded-full bg-emerald-700 text-[8px] font-bold text-white ring-1.5 ring-white"
+                      >
+                        {u.displayName ? u.displayName.slice(0, 1).toUpperCase() : 'S'}
+                      </div>
+                    )
+                  ))}
+                </div>
+              )}
+
+              <div className="flex items-center gap-1 text-[11px] font-bold text-emerald-900">
+                <Users className="w-3 h-3 text-emerald-700 sm:hidden" />
+                <span>{tenantActiveUsers.length}</span>
+                <span className="hidden sm:inline">Active</span>
+              </div>
+            </button>
+          )}
+
           {/* Smart Room Finder trigger button */}
           {activeOffice && onOpenRoomFinder && !isAdminMode && (
             <button

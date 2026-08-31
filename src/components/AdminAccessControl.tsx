@@ -4,7 +4,7 @@ import {
   Plus, Search, AlertCircle, RefreshCw, UploadCloud, Lock, CheckCircle2,
   Shield, UserCheck, X, Building2, Crown
 } from 'lucide-react';
-import { ApprovedUser, AccessKey, Tenant, TenantRole } from '../types';
+import { ApprovedUser, AccessKey, Tenant, TenantRole, ActivePresenceUser } from '../types';
 import { evaluateTokenStrength, getKeyStatus, isTokenExpired, isTokenExhausted } from '../utils/security';
 
 interface AdminAccessControlProps {
@@ -14,6 +14,7 @@ interface AdminAccessControlProps {
   tenants?: Tenant[];
   currentTenant?: Tenant | null;
   isMasterAdmin?: boolean;
+  activeUsers?: ActivePresenceUser[];
   onSaveTenant?: (tenant: Tenant) => void;
   onAddApprovedUser: (email: string, name?: string, department?: string) => Promise<void>;
   onBulkAddApprovedUsers: (emails: string[]) => Promise<number>;
@@ -32,6 +33,7 @@ export const AdminAccessControl: React.FC<AdminAccessControlProps> = ({
   tenants = [],
   currentTenant,
   isMasterAdmin = false,
+  activeUsers = [],
   onSaveTenant,
   onAddApprovedUser,
   onBulkAddApprovedUsers,
@@ -583,38 +585,55 @@ export const AdminAccessControl: React.FC<AdminAccessControlProps> = ({
               </div>
             ) : (
               <div className="space-y-2 max-h-[420px] overflow-y-auto pr-1">
-                {filteredUsers.map((user) => (
-                  <div
-                    key={user.id}
-                    className="flex items-center justify-between bg-white border border-slate-200 rounded-xl p-3 hover:border-slate-300 transition-colors shadow-2xs"
-                  >
-                    <div className="space-y-0.5 min-w-0 pr-3">
-                      <div className="flex items-center gap-2">
-                        <span className="text-xs font-bold text-slate-800 truncate">{user.email}</span>
-                        {user.department && (
-                          <span className="text-[9px] font-mono bg-slate-100 text-slate-600 px-1.5 py-0.5 rounded font-bold uppercase">
-                            {user.department}
-                          </span>
-                        )}
-                      </div>
-                      {user.name && (
-                        <p className="text-[10px] text-slate-500 truncate">{user.name}</p>
-                      )}
-                      <p className="text-[9px] text-slate-400 font-mono">
-                        Added on {new Date(user.addedAt).toLocaleDateString()} by {user.addedBy}
-                      </p>
-                    </div>
+                {filteredUsers.map((user) => {
+                  const activeSession = activeUsers.find(
+                    u => u.email.toLowerCase() === user.email.toLowerCase()
+                  );
+                  const isOnline = !!activeSession;
 
-                    <button
-                      type="button"
-                      onClick={() => onRemoveApprovedUser(user.id)}
-                      className="p-1.5 text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded-lg transition-colors cursor-pointer shrink-0"
-                      title="Revoke access"
+                  return (
+                    <div
+                      key={user.id}
+                      className={`flex items-center justify-between border rounded-xl p-3 transition-colors shadow-2xs ${
+                        isOnline 
+                          ? 'bg-emerald-50/40 border-emerald-200/80 hover:border-emerald-300' 
+                          : 'bg-white border-slate-200 hover:border-slate-300'
+                      }`}
                     >
-                      <Trash2 className="w-4 h-4" />
-                    </button>
-                  </div>
-                ))}
+                      <div className="space-y-0.5 min-w-0 pr-3">
+                        <div className="flex items-center gap-2 flex-wrap">
+                          <span className="text-xs font-bold text-slate-800 truncate">{user.email}</span>
+                          {isOnline && (
+                            <span className="inline-flex items-center gap-1 text-[9px] font-bold text-emerald-700 bg-emerald-100 border border-emerald-200/80 px-1.5 py-0.5 rounded-full">
+                              <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
+                              <span>Active ({activeSession?.currentView || 'Online'})</span>
+                            </span>
+                          )}
+                          {user.department && (
+                            <span className="text-[9px] font-mono bg-slate-100 text-slate-600 px-1.5 py-0.5 rounded font-bold uppercase">
+                              {user.department}
+                            </span>
+                          )}
+                        </div>
+                        {user.name && (
+                          <p className="text-[10px] text-slate-500 truncate">{user.name}</p>
+                        )}
+                        <p className="text-[9px] text-slate-400 font-mono">
+                          Added on {new Date(user.addedAt).toLocaleDateString()} by {user.addedBy}
+                        </p>
+                      </div>
+
+                      <button
+                        type="button"
+                        onClick={() => onRemoveApprovedUser(user.id)}
+                        className="p-1.5 text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded-lg transition-colors cursor-pointer shrink-0"
+                        title="Revoke access"
+                      >
+                        <Trash2 className="w-4 h-4" />
+                      </button>
+                    </div>
+                  );
+                })}
               </div>
             )}
           </div>

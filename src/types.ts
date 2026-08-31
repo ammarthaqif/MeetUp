@@ -161,3 +161,28 @@ export interface AuditLog {
   formattedTimestamp: string;
 }
 
+export type PresenceStatus = 'online' | 'in_booking' | 'idle' | 'offline';
+
+export interface ActivePresenceUser {
+  id: string; // Session / Presence ID (unique per tab or device)
+  sessionId: string;
+  uid?: string;
+  email: string;
+  displayName: string;
+  photoURL?: string;
+  role: TenantRole | 'super_admin';
+  tenantId: string;
+  tenantName: string;
+  tenantCode?: string;
+  officeId?: string;
+  officeName?: string;
+  currentView?: string; // e.g. 'Day Timeline', 'Weekly Grid', 'Floor Plan', 'Room Finder', 'Utilization'
+  activeRoomId?: string; // Room ID being viewed or booked
+  activeRoomName?: string;
+  status: PresenceStatus;
+  loginMethod: 'google' | 'token' | 'passkey' | 'guest';
+  lastActive: number; // Unix timestamp in ms
+  joinedAt: number; // Unix timestamp in ms
+  device?: string; // Browser / Platform summary
+}
+

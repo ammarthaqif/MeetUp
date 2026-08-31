@@ -25,12 +25,12 @@ import { InteractiveFloorPlan } from './components/InteractiveFloorPlan';
 import { RoomUtilizationDashboard } from './components/RoomUtilizationDashboard';
 import { MyBookings } from './components/MyBookings';
 import { AdminPanel } from './components/AdminPanel';
-import { SimulatedInbox, SimulatedEmail } from './components/SimulatedInbox';
 import { TenantPortalGate } from './components/TenantPortalGate';
 import { TenantSwitcherModal } from './components/TenantSwitcherModal';
+import { ActiveUsersModal } from './components/ActiveUsersModal';
 
 // Types and Utilities
-import { Booking, Room, Office, ApprovedUser, AccessKey, AuditLog, AuditActionType, Tenant, TenantRole, BlockedDate } from './types';
+import { Booking, Room, Office, ApprovedUser, AccessKey, AuditLog, AuditActionType, Tenant, TenantRole, BlockedDate, ActivePresenceUser } from './types';
 import { formatFriendlyDate, timeToMinutes, cleanBookingForFirestore } from './utils';
 import { DEFAULT_SEED_BLOCKED_DATES } from './utils/icsHolidayParser';
 import { 
@@ -57,6 +57,13 @@ import {
   DEFAULT_MULTI_TENANT_BOOKINGS 
 } from './data/defaultTenants';
 import { broadcastMessage, subscribeToSyncChannel, CLIENT_TAB_ID } from './utils/syncChannel';
+import { 
+  pushPresenceHeartbeat, 
+  removePresenceSession, 
+  filterActiveSessions, 
+  generateDefaultSeedPresence, 
+  SESSION_TAB_ID 
+} from './utils/presenceManager';
 
 const ADMIN_EMAIL = 'ammarthaqif.ar@gmail.com';
 
@@ -253,15 +260,9 @@ export default function App() {
   const [passkeyInput, setPasskeyInput] = useState('');
   const [passkeyError, setPasskeyError] = useState('');
 
-  // Simulated Email Inbox State
-  const [simulatedEmails, setSimulatedEmails] = useState<SimulatedEmail[]>(() => {
-    try {
-      const saved = localStorage.getItem('office_sync_emails');
-      return saved ? JSON.parse(saved) : [];
-    } catch {
-      return [];
-    }
-  });
+  // Active Staff Presence & Concurrent Sessions
+  const [activeUsers, setActiveUsers] = useState<ActivePresenceUser[]>(() => generateDefaultSeedPresence());
+  const [isActiveUsersModalOpen, setIsActiveUsersModalOpen] = useState(false);
 
   // UI notifications
   const [notification, setNotification] = useState<{ type: 'success' | 'error' | 'info'; message: string } | null>(null);
@@ -409,13 +410,6 @@ export default function App() {
     } catch {}
   }, [auditLogs]);
 
-  useEffect(() => {
-    try {
-      localStorage.setItem('office_sync_emails', JSON.stringify(simulatedEmails));
-      broadcastSync('SYNC_EMAILS', simulatedEmails);
-    } catch {}
-  }, [simulatedEmails]);
-
   // Real-Time Cross-Tab / Cross-Window Listener for multi-staff sync
   useEffect(() => {
     const unsubChannel = subscribeToSyncChannel((event) => {
@@ -432,10 +426,17 @@ export default function App() {
         setAccessKeys(payload);
       } else if (type === 'SYNC_BLOCKED_DATES' && Array.isArray(payload)) {
         setBlockedDates(payload);
-      } else if (type === 'SYNC_EMAILS' && Array.isArray(payload)) {
-        setSimulatedEmails(payload);
       } else if (type === 'SYNC_AUDIT_LOGS' && Array.isArray(payload)) {
         setAuditLogs(payload);
+      } else if (type === 'SYNC_PRESENCE' && payload) {
+        setActiveUsers(prev => {
+          const map = new Map<string, ActivePresenceUser>();
+          prev.forEach(u => map.set(u.id, u));
+          map.set(payload.id, payload);
+          return filterActiveSessions(Array.from(map.values()));
+        });
+      } else if (type === 'PRESENCE_LEAVE' && payload?.id) {
+        setActiveUsers(prev => prev.filter(u => u.id !== payload.id));
       }
     });
 
@@ -460,9 +461,6 @@ export default function App() {
         } else if (e.key === 'office_sync_blocked_dates') {
           const parsed = JSON.parse(e.newValue);
           if (Array.isArray(parsed)) setBlockedDates(parsed);
-        } else if (e.key === 'office_sync_emails') {
-          const parsed = JSON.parse(e.newValue);
-          if (Array.isArray(parsed)) setSimulatedEmails(parsed);
         }
       } catch {}
     };
@@ -474,6 +472,110 @@ export default function App() {
       unsubChannel();
     };
   }, []);
+
+  // -------------------------------------------------------------
+  // Real-Time Active Presence & Heartbeat for Concurrent Multi-Staff
+  // -------------------------------------------------------------
+  useEffect(() => {
+    const currentIdentityEmail = user?.email || (tenantAccessToken ? `${cleanAndNormalizeToken(tenantAccessToken).toLowerCase()}@${activeTenant?.slug || 'workspace'}.internal` : 'staff.collaborator@enterprise.internal');
+    const currentDisplayName = user?.displayName || (isMasterAdmin ? 'Master Superadmin' : isTokenCompanyAdmin ? `${activeTenant?.name || 'Company'} Admin` : 'Authorized Staff');
+    const currentRole: TenantRole | 'super_admin' = isMasterAdmin ? 'super_admin' : (isFocalAdmin || isTokenCompanyAdmin) ? 'company_admin' : 'staff';
+    const currentStatus = isModalOpen ? 'in_booking' : 'online';
+    const loginMethod = user ? 'google' : (tenantAccessToken ? 'token' : 'guest');
+
+    const viewNameMap: Record<string, string> = {
+      day: 'Day Timeline',
+      week: 'Weekly Grid',
+      month: 'Monthly Availability',
+      floorplan: 'Interactive Floor Plan',
+      utilization: 'Utilization Analytics'
+    };
+
+    const currentPresence: ActivePresenceUser = {
+      id: SESSION_TAB_ID,
+      sessionId: SESSION_TAB_ID,
+      uid: user?.uid,
+      email: currentIdentityEmail,
+      displayName: currentDisplayName,
+      photoURL: user?.photoURL || undefined,
+      role: currentRole,
+      tenantId: activeTenant?.id || 'tenant-acme',
+      tenantName: activeTenant?.name || 'Acme Corporation',
+      tenantCode: activeTenant?.code || 'ACME',
+      officeId: activeOffice?.id,
+      officeName: activeOffice?.name,
+      currentView: isAdminMode ? 'Admin Security Portal' : (isModalOpen ? `Booking ${selectedRoomForModal?.name || 'Room'}` : viewNameMap[viewMode] || 'Workspace Dashboard'),
+      activeRoomId: selectedRoomForModal?.id,
+      activeRoomName: selectedRoomForModal?.name,
+      status: currentStatus,
+      loginMethod: loginMethod,
+      lastActive: Date.now(),
+      joinedAt: Date.now(),
+      device: typeof navigator !== 'undefined' ? (navigator.userAgent.includes('Mobile') ? 'Mobile Device' : 'Desktop Browser') : 'Desktop',
+    };
+
+    // Immediate initial push
+    pushPresenceHeartbeat(currentPresence);
+
+    // Heartbeat loop every 20 seconds
+    const heartbeatInterval = setInterval(() => {
+      pushPresenceHeartbeat({
+        ...currentPresence,
+        lastActive: Date.now(),
+      });
+    }, 20000);
+
+    // Prune stale offline sessions every 10 seconds
+    const pruneTimer = setInterval(() => {
+      setActiveUsers(prev => filterActiveSessions(prev));
+    }, 10000);
+
+    // Window unload session cleanup
+    const handleUnload = () => {
+      removePresenceSession(SESSION_TAB_ID, activeTenant?.id);
+    };
+    window.addEventListener('beforeunload', handleUnload);
+
+    return () => {
+      clearInterval(heartbeatInterval);
+      clearInterval(pruneTimer);
+      window.removeEventListener('beforeunload', handleUnload);
+    };
+  }, [user, tenantAccessToken, activeTenant, activeOffice, viewMode, isModalOpen, selectedRoomForModal, isAdminMode, isMasterAdmin, isFocalAdmin, isTokenCompanyAdmin]);
+
+  // Firestore Real-Time Listener for Concurrent Presence Sessions across all devices
+  useEffect(() => {
+    if (!db) return;
+
+    try {
+      const q = collection(db, 'presence');
+      const unsub = onSnapshot(q, (snapshot) => {
+        const livePresences: ActivePresenceUser[] = [];
+        snapshot.forEach((docSnap) => {
+          const data = docSnap.data() as ActivePresenceUser;
+          if (data && data.lastActive) {
+            livePresences.push(data);
+          }
+        });
+
+        if (livePresences.length > 0) {
+          setActiveUsers(prev => {
+            const mergedMap = new Map<string, ActivePresenceUser>();
+            prev.forEach(p => mergedMap.set(p.id, p));
+            livePresences.forEach(lp => mergedMap.set(lp.id, lp));
+            return filterActiveSessions(Array.from(mergedMap.values()));
+          });
+        }
+      }, (err) => {
+        console.warn('Presence onSnapshot fallback:', err);
+      });
+
+      return () => unsub();
+    } catch (e) {
+      console.warn('Presence listener error:', e);
+    }
+  }, []);
+
 
   // -------------------------------------------------------------
   // Centralized Activity & Audit Logger
@@ -1523,26 +1625,6 @@ export default function App() {
       persistBookingsSafely(createdBookings);
 
       const dateSpanLabel = `${bookingData.multiDates[0]} to ${bookingData.multiDates[bookingData.multiDates.length - 1]}`;
-      const newEmail: SimulatedEmail = {
-        id: `email-${Date.now()}`,
-        to: emailToDeliver,
-        subject: `[CONFIRMED] Recurring Series: "${bookingData.title}" (${bookingData.multiDates.length} Sessions)`,
-        date: new Date().toLocaleString(),
-        body: `Successful reservation for ${room.name} across ${bookingData.multiDates.length} sessions (${dateSpanLabel}) at ${bookingData.startTime} - ${bookingData.endTime}.`,
-        details: {
-          title: bookingData.title,
-          roomName: room.name,
-          floor: room.floor,
-          startTime: bookingData.startTime,
-          endTime: bookingData.endTime,
-          officeName: activeOffice?.name || 'Workspace HQ',
-          officeLocation: activeOffice?.location || 'Corporate Location',
-          dates: bookingData.multiDates,
-          hostName: bookingData.hostName,
-          attendees: bookingData.attendees,
-        }
-      };
-      setSimulatedEmails(prev => [newEmail, ...prev]);
       showNotification('success', `Successfully reserved ${room.name} across ${bookingData.multiDates.length} recurring dates (${dateSpanLabel})!`);
 
     } else {
@@ -1610,26 +1692,6 @@ export default function App() {
           tenantId: resolvedTenantId,
         });
 
-        const editEmail: SimulatedEmail = {
-          id: `email-${Date.now()}`,
-          to: emailToDeliver,
-          subject: `[UPDATED] Room Reservation Details: "${bookingData.title}"`,
-          date: new Date().toLocaleString(),
-          body: `Your booking details have been modified.`,
-          details: {
-            title: `UPDATED: ${bookingData.title}`,
-            roomName: room.name,
-            floor: room.floor,
-            startTime: bookingData.startTime,
-            endTime: bookingData.endTime,
-            officeName: activeOffice?.name || 'Workspace HQ',
-            officeLocation: activeOffice?.location || 'Corporate Location',
-            dates: [bookingData.date],
-            hostName: bookingData.hostName,
-            attendees: bookingData.attendees,
-          }
-        };
-        setSimulatedEmails(prev => [editEmail, ...prev]);
         showNotification('success', 'Meeting room reservation updated successfully.');
       } else {
         // Optimistic instant state update
@@ -1658,26 +1720,6 @@ export default function App() {
           tenantId: resolvedTenantId,
         });
 
-        const newEmail: SimulatedEmail = {
-          id: `email-${Date.now()}`,
-          to: emailToDeliver,
-          subject: `[CONFIRMED] Room Reservation: "${bookingData.title}"`,
-          date: new Date().toLocaleString(),
-          body: `Successful booking reservation!`,
-          details: {
-            title: bookingData.title,
-            roomName: room.name,
-            floor: room.floor,
-            startTime: bookingData.startTime,
-            endTime: bookingData.endTime,
-            officeName: activeOffice?.name || 'Workspace HQ',
-            officeLocation: activeOffice?.location || 'Corporate Location',
-            dates: [bookingData.date],
-            hostName: bookingData.hostName,
-            attendees: bookingData.attendees,
-          }
-        };
-        setSimulatedEmails(prev => [newEmail, ...prev]);
         showNotification('success', `Successfully reserved ${room.name} for "${bookingData.title}".`);
       }
     }
@@ -1732,26 +1774,6 @@ export default function App() {
       tenantId: resolvedTenantId,
     });
 
-    const cancelEmail: SimulatedEmail = {
-      id: `email-${Date.now()}`,
-      to: booking.hostEmail,
-      subject: `[CANCELLED] Reservation Cancellation Alert: "${booking.title}"`,
-      date: new Date().toLocaleString(),
-      body: `This email confirms your meeting room booking was successfully deleted.`,
-      details: {
-        title: `CANCELLED: ${booking.title}`,
-        roomName: room ? room.name : 'Meeting Room',
-        floor: booking.floor,
-        startTime: booking.startTime,
-        endTime: booking.endTime,
-        officeName: activeOffice?.name || 'Workspace HQ',
-        officeLocation: activeOffice?.location || 'Corporate Location',
-        dates: [booking.date],
-        hostName: booking.hostName,
-        attendees: [],
-      }
-    };
-    setSimulatedEmails(prev => [cancelEmail, ...prev]);
     showNotification('success', 'Meeting room reservation deleted successfully.');
   };
 
@@ -2497,6 +2519,8 @@ export default function App() {
         onExitAdminMode={handleExitAdminMode}
         onOpenRoomFinder={() => setIsRoomFinderOpen(true)}
         adminEmail={ADMIN_EMAIL}
+        activeUsers={activeUsers}
+        onOpenActiveUsers={() => setIsActiveUsersModalOpen(true)}
       />
 
       {/* Main View Router */}
@@ -2531,6 +2555,7 @@ export default function App() {
             currentTenant={activeTenant}
             isMasterAdmin={isMasterAdmin}
             blockedDates={blockedDates}
+            activeUsers={activeUsers}
             onSaveTenant={handleSaveTenant}
             onDeleteTenant={handleDeleteTenant}
             onGenerateTenantToken={handleGenerateTenantToken}
@@ -3108,12 +3133,6 @@ export default function App() {
         )}
       </AnimatePresence>
 
-      {/* Simulated personal Corporate Mail Client tray (floating) */}
-      <SimulatedInbox
-        emails={simulatedEmails}
-        onClear={() => setSimulatedEmails([])}
-      />
-
       {/* Multi-Tenant Organization Switcher Modal */}
       <TenantSwitcherModal
         isOpen={isTenantSwitcherOpen}
@@ -3126,6 +3145,17 @@ export default function App() {
         isMasterAdmin={isMasterAdmin}
         onSwitchTenant={handleSwitchTenant}
         onLockTenant={handleLockTenant}
+      />
+
+      {/* Active Staff & Live Concurrent Collaborators Modal */}
+      <ActiveUsersModal
+        isOpen={isActiveUsersModalOpen}
+        onClose={() => setIsActiveUsersModalOpen(false)}
+        activeUsers={activeUsers}
+        activeTenant={activeTenant}
+        activeOffice={activeOffice}
+        isMasterAdmin={isMasterAdmin}
+        onSwitchTenant={handleSwitchTenant}
       />
 
     </div>

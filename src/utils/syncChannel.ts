@@ -8,8 +8,9 @@ export type SyncMessageType =
   | 'SYNC_USERS'
   | 'SYNC_KEYS'
   | 'SYNC_BLOCKED_DATES'
-  | 'SYNC_EMAILS'
   | 'SYNC_AUDIT_LOGS'
+  | 'SYNC_PRESENCE'
+  | 'PRESENCE_LEAVE'
   | 'BOOKING_CREATED_ALERT'
   | 'BOOKING_CONFLICT_EVENT';
 

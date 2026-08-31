@@ -215,6 +215,110 @@ export const BookingModal: React.FC<BookingModalProps> = ({
     return includedDates.filter(d => seriesDateConflictMap.has(d));
   }, [includedDates, seriesDateConflictMap]);
 
+  // All bookings for the selected room on the selected date
+  const currentRoomDayBookings = useMemo(() => {
+    if (!roomId || !date || !Array.isArray(bookings)) return [];
+    return bookings
+      .filter(b => b && b.roomId === roomId && b.date === date && (!editingBooking || b.id !== editingBooking.id))
+      .sort((a, b) => timeToMinutes(a.startTime) - timeToMinutes(b.startTime));
+  }, [roomId, date, bookings, editingBooking]);
+
+  // Detailed overlap breakdown for single date
+  const detailedOverlapList = useMemo(() => {
+    if (!startTime || !endTime || currentRoomDayBookings.length === 0) return [];
+    const startMin = timeToMinutes(startTime);
+    const endMin = timeToMinutes(endTime);
+    if (endMin <= startMin) return [];
+
+    return currentRoomDayBookings
+      .filter(b => {
+        const bStart = timeToMinutes(b.startTime);
+        const bEnd = timeToMinutes(b.endTime);
+        return Math.max(startMin, bStart) < Math.min(endMin, bEnd);
+      })
+      .map(b => {
+        const bStart = timeToMinutes(b.startTime);
+        const bEnd = timeToMinutes(b.endTime);
+        const overlapStartMin = Math.max(startMin, bStart);
+        const overlapEndMin = Math.min(endMin, bEnd);
+        const overlapMins = Math.max(0, overlapEndMin - overlapStartMin);
+        return {
+          booking: b,
+          overlapStart: minutesToTime(overlapStartMin),
+          overlapEnd: minutesToTime(overlapEndMin),
+          overlapMins,
+        };
+      });
+  }, [startTime, endTime, currentRoomDayBookings]);
+
+  // Suggested free slots for the selected room on the selected date
+  const suggestedFreeSlots = useMemo(() => {
+    if (!roomId || !date || !startTime || !endTime) return [];
+    const requestedDuration = Math.max(30, timeToMinutes(endTime) - timeToMinutes(startTime));
+    const durationToUse = requestedDuration > 0 && requestedDuration <= 240 ? requestedDuration : 60;
+    
+    // Standard working day timeline: 08:00 (480 mins) to 19:00 (1140 mins)
+    const DAY_START = 480;
+    const DAY_END = 1140;
+
+    const occupiedIntervals = currentRoomDayBookings
+      .map(b => ({ start: timeToMinutes(b.startTime), end: timeToMinutes(b.endTime) }))
+      .sort((a, b) => a.start - b.start);
+
+    const merged: { start: number; end: number }[] = [];
+    for (const interval of occupiedIntervals) {
+      if (merged.length === 0) {
+        merged.push({ ...interval });
+      } else {
+        const last = merged[merged.length - 1];
+        if (interval.start < last.end) {
+          last.end = Math.max(last.end, interval.end);
+        } else {
+          merged.push({ ...interval });
+        }
+      }
+    }
+
+    const freeGaps: { start: number; end: number }[] = [];
+    let cur = DAY_START;
+    for (const occ of merged) {
+      if (occ.start > cur) {
+        freeGaps.push({ start: cur, end: Math.min(occ.start, DAY_END) });
+      }
+      cur = Math.max(cur, occ.end);
+    }
+    if (cur < DAY_END) {
+      freeGaps.push({ start: cur, end: DAY_END });
+    }
+
+    const suggestions: { start: string; end: string; duration: number }[] = [];
+    for (const gap of freeGaps) {
+      const gapDuration = gap.end - gap.start;
+      if (gapDuration >= durationToUse) {
+        suggestions.push({
+          start: minutesToTime(gap.start),
+          end: minutesToTime(gap.start + durationToUse),
+          duration: durationToUse,
+        });
+        if (gapDuration >= durationToUse * 2) {
+          suggestions.push({
+            start: minutesToTime(gap.start + durationToUse),
+            end: minutesToTime(gap.start + durationToUse * 2),
+            duration: durationToUse,
+          });
+        }
+      } else if (gapDuration >= 30) {
+        suggestions.push({
+          start: minutesToTime(gap.start),
+          end: minutesToTime(gap.end),
+          duration: gapDuration,
+        });
+      }
+    }
+
+    return suggestions.slice(0, 4);
+  }, [roomId, date, startTime, endTime, currentRoomDayBookings]);
+
   // Find Alternative Rooms that have full availability across the selected series dates
   const seriesAlternativeRooms = useMemo(() => {
     if (!isRecurring || includedDates.length === 0 || !startTime || !endTime) return [];
@@ -657,52 +761,89 @@ export const BookingModal: React.FC<BookingModalProps> = ({
 
           {/* VISUAL OVERLAP & CONFLICT WARNING SYSTEM (Single-day mode) */}
           {isConflict && !isRecurring && directCollisions.length > 0 && (
-            <div className="p-4 bg-gradient-to-br from-rose-50 to-amber-50 border-2 border-rose-300/80 text-rose-950 rounded-2xl shadow-xs space-y-3 animate-in fade-in zoom-in-95 duration-200">
+            <div className="p-4 bg-gradient-to-br from-rose-50 via-rose-50/80 to-amber-50 border-2 border-rose-300 text-rose-950 rounded-2xl shadow-sm space-y-3 animate-in fade-in zoom-in-95 duration-200">
               <div className="flex items-start justify-between gap-2">
                 <div className="flex items-center gap-2">
-                  <span className="relative flex h-3 w-3">
+                  <span className="relative flex h-3.5 w-3.5">
                     <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-rose-400 opacity-75"></span>
-                    <span className="relative inline-flex rounded-full h-3 w-3 bg-rose-600"></span>
+                    <span className="relative inline-flex rounded-full h-3.5 w-3.5 bg-rose-600"></span>
                   </span>
-                  <span className="text-xs font-black text-rose-900 tracking-tight uppercase flex items-center gap-1.5 font-mono">
-                    <ShieldAlert className="w-4 h-4 text-rose-600 shrink-0" />
-                    Direct Room Booking Conflict
-                  </span>
+                  <div>
+                    <span className="text-xs font-black text-rose-900 tracking-tight uppercase flex items-center gap-1.5 font-mono">
+                      <ShieldAlert className="w-4 h-4 text-rose-600 shrink-0" />
+                      Direct Room Booking Conflict Detected
+                    </span>
+                    <p className="text-[11px] text-rose-800 font-sans font-medium mt-0.5">
+                      The selected time slot <strong className="font-mono bg-rose-100 px-1 py-0.5 rounded text-rose-900">{startTime} – {endTime}</strong> overlaps with {directCollisions.length} existing {directCollisions.length === 1 ? 'reservation' : 'reservations'} in <strong>{currentRoom?.name}</strong>.
+                    </p>
+                  </div>
                 </div>
-                <span className="text-[10px] font-mono bg-rose-200 text-rose-900 px-2 py-0.5 rounded-full font-bold">
+                <span className="text-[10px] font-mono bg-rose-200 text-rose-900 px-2.5 py-0.5 rounded-full font-bold uppercase shrink-0 border border-rose-300">
                   {directCollisions.length} {directCollisions.length === 1 ? 'Collision' : 'Collisions'}
                 </span>
               </div>
 
-              {/* Conflicting Booking Details */}
+              {/* Conflicting Booking Details with Overlap Span */}
               <div className="space-y-2">
-                {directCollisions.map((collision) => (
+                {detailedOverlapList.map((overlap) => (
                   <div 
-                    key={collision.id} 
-                    className="p-2.5 bg-white/90 rounded-xl border border-rose-200 text-xs shadow-2xs space-y-1"
+                    key={overlap.booking.id} 
+                    className="p-3 bg-white/95 rounded-xl border border-rose-200 text-xs shadow-2xs space-y-1.5"
                   >
-                    <div className="flex items-center justify-between font-bold text-slate-800">
-                      <span className="truncate max-w-[240px] text-rose-950 font-sans">
-                        "{collision.title || 'Reserved Meeting'}"
+                    <div className="flex items-center justify-between font-bold text-slate-800 gap-2 flex-wrap">
+                      <span className="truncate max-w-[280px] text-rose-950 font-sans text-xs">
+                        "{overlap.booking.title || 'Reserved Meeting'}"
                       </span>
-                      <span className="font-mono text-[11px] bg-rose-100 text-rose-800 px-2 py-0.5 rounded font-bold">
-                        {collision.startTime} - {collision.endTime}
-                      </span>
+                      <div className="flex items-center gap-1.5 font-mono text-[11px]">
+                        <span className="bg-slate-100 text-slate-700 px-2 py-0.5 rounded font-semibold">
+                          Booked: {overlap.booking.startTime} - {overlap.booking.endTime}
+                        </span>
+                        <span className="bg-rose-100 text-rose-900 px-2 py-0.5 rounded font-bold border border-rose-200">
+                          ⚡ Overlaps: {overlap.overlapStart} - {overlap.overlapEnd} ({overlap.overlapMins} mins)
+                        </span>
+                      </div>
                     </div>
-                    <div className="text-[11px] text-slate-500 flex items-center justify-between">
-                      <span>Host: <strong className="text-slate-700">{collision.hostName || collision.hostEmail}</strong></span>
-                      <span className="text-[10px] text-slate-400 font-mono">Lvl {collision.floor}</span>
+                    <div className="text-[11px] text-slate-500 flex items-center justify-between flex-wrap gap-1">
+                      <span>Organizer: <strong className="text-slate-700">{overlap.booking.hostName || overlap.booking.hostEmail}</strong> ({overlap.booking.hostEmail})</span>
+                      <span className="text-[10px] text-slate-400 font-mono">Room Level {overlap.booking.floor}</span>
                     </div>
                   </div>
                 ))}
               </div>
 
+              {/* Quick 1-Click Available Open Slots on this Room */}
+              {suggestedFreeSlots.length > 0 && (
+                <div className="pt-2 border-t border-rose-200/80">
+                  <div className="text-[10px] font-bold uppercase tracking-wider text-rose-900 font-mono mb-1.5 flex items-center gap-1">
+                    <Clock className="w-3.5 h-3.5 text-emerald-600" />
+                    <span>Suggested Open Slots Today for {currentRoom?.name}:</span>
+                  </div>
+                  <div className="flex flex-wrap gap-1.5">
+                    {suggestedFreeSlots.map((slot, sIdx) => (
+                      <button
+                        type="button"
+                        key={sIdx}
+                        onClick={() => {
+                          setStartTime(slot.start);
+                          setEndTime(slot.end);
+                        }}
+                        className="px-2.5 py-1 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg text-xs font-bold transition-all shadow-2xs cursor-pointer flex items-center gap-1"
+                      >
+                        <Clock className="w-3 h-3" />
+                        <span>Use {slot.start} – {slot.end}</span>
+                        <span className="text-[10px] opacity-80 font-mono">({slot.duration}m)</span>
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              )}
+
               {/* Smart Alternative Rooms on the Same Floor */}
               {alternativeAvailableRoomsOnFloor.length > 0 && (
-                <div className="pt-1 border-t border-rose-200/60">
+                <div className="pt-2 border-t border-rose-200/60">
                   <div className="text-[10px] font-bold uppercase tracking-wider text-rose-800 font-mono mb-1.5 flex items-center gap-1">
                     <Sparkles className="w-3 h-3 text-amber-600" />
-                    Available Alternative Spaces on Level {currentRoom?.floor}:
+                    <span>Available Alternative Spaces on Level {currentRoom?.floor}:</span>
                   </div>
                   <div className="flex flex-wrap gap-1.5">
                     {alternativeAvailableRoomsOnFloor.map((altRoom) => (
@@ -710,11 +851,11 @@ export const BookingModal: React.FC<BookingModalProps> = ({
                         type="button"
                         key={altRoom.id}
                         onClick={() => setRoomId(altRoom.id)}
-                        className="px-2.5 py-1 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg text-xs font-bold transition-all shadow-2xs cursor-pointer flex items-center gap-1"
+                        className="px-2.5 py-1 bg-slate-800 hover:bg-slate-900 text-white rounded-lg text-xs font-bold transition-all shadow-2xs cursor-pointer flex items-center gap-1 border border-slate-700"
                       >
-                        <CheckCircle2 className="w-3 h-3" />
+                        <CheckCircle2 className="w-3 h-3 text-emerald-400" />
                         <span>Switch to {altRoom.name}</span>
-                        <span className="text-[10px] opacity-80">({altRoom.capacity} pax)</span>
+                        <span className="text-[10px] text-slate-300">({altRoom.capacity} pax)</span>
                       </button>
                     ))}
                   </div>
@@ -834,39 +975,215 @@ export const BookingModal: React.FC<BookingModalProps> = ({
             </div>
           )}
 
-          {/* Times Selection */}
-          <div className="grid grid-cols-2 gap-4">
-            <div>
-              <label className="block text-xs font-bold text-slate-600 uppercase tracking-wider mb-2 font-mono">
-                Start Time
-              </label>
-              <div className="relative">
-                <Clock className="w-4 h-4 text-slate-400 absolute left-3 top-3" />
-                <input
-                  type="time"
-                  value={startTime}
-                  onChange={(e) => setStartTime(e.target.value)}
-                  step="900" // 15-minute intervals
-                  className="w-full border border-slate-200 rounded-xl pl-10 pr-3 py-2 text-sm text-slate-800 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 bg-white"
-                />
+          {/* Times Selection & Dynamic Live Conflict Visualizer */}
+          <div className="space-y-3">
+            <div className="grid grid-cols-2 gap-4">
+              <div>
+                <div className="flex items-center justify-between mb-1.5">
+                  <label className="block text-xs font-bold text-slate-600 uppercase tracking-wider font-mono">
+                    Start Time
+                  </label>
+                  {isConflict && !isRecurring && (
+                    <span className="text-[10px] font-bold text-rose-600 uppercase font-mono animate-pulse">
+                      ⚠️ Conflict
+                    </span>
+                  )}
+                </div>
+                <div className="relative">
+                  <Clock className={`w-4 h-4 absolute left-3 top-3 transition-colors ${
+                    isConflict && !isRecurring ? 'text-rose-500' : 'text-slate-400'
+                  }`} />
+                  <input
+                    type="time"
+                    value={startTime}
+                    onChange={(e) => setStartTime(e.target.value)}
+                    step="900" // 15-minute intervals
+                    className={`w-full rounded-xl pl-10 pr-3 py-2 text-sm transition-all focus:outline-none ${
+                      isConflict && !isRecurring
+                        ? 'border-2 border-rose-400 focus:ring-2 focus:ring-rose-400 focus:border-rose-500 bg-rose-50/40 text-rose-950 font-bold shadow-xs'
+                        : 'border border-slate-200 focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 bg-white text-slate-800'
+                    }`}
+                  />
+                </div>
+              </div>
+
+              <div>
+                <div className="flex items-center justify-between mb-1.5">
+                  <label className="block text-xs font-bold text-slate-600 uppercase tracking-wider font-mono">
+                    End Time
+                  </label>
+                  {timeToMinutes(endTime) > timeToMinutes(startTime) && (
+                    <span className="text-[10px] font-bold text-slate-500 font-mono">
+                      {Math.max(0, timeToMinutes(endTime) - timeToMinutes(startTime)) >= 60
+                        ? `${Math.floor((timeToMinutes(endTime) - timeToMinutes(startTime)) / 60)}h ${(timeToMinutes(endTime) - timeToMinutes(startTime)) % 60 ? `${(timeToMinutes(endTime) - timeToMinutes(startTime)) % 60}m` : ''}`
+                        : `${timeToMinutes(endTime) - timeToMinutes(startTime)}m`}
+                    </span>
+                  )}
+                </div>
+                <div className="relative">
+                  <Clock className={`w-4 h-4 absolute left-3 top-3 transition-colors ${
+                    isConflict && !isRecurring ? 'text-rose-500' : 'text-slate-400'
+                  }`} />
+                  <input
+                    type="time"
+                    value={endTime}
+                    onChange={(e) => setEndTime(e.target.value)}
+                    step="900" // 15-minute intervals
+                    className={`w-full rounded-xl pl-10 pr-3 py-2 text-sm transition-all focus:outline-none ${
+                      isConflict && !isRecurring
+                        ? 'border-2 border-rose-400 focus:ring-2 focus:ring-rose-400 focus:border-rose-500 bg-rose-50/40 text-rose-950 font-bold shadow-xs'
+                        : 'border border-slate-200 focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 bg-white text-slate-800'
+                    }`}
+                  />
+                </div>
               </div>
             </div>
 
-            <div>
-              <label className="block text-xs font-bold text-slate-600 uppercase tracking-wider mb-2 font-mono">
-                End Time
-              </label>
-              <div className="relative">
-                <Clock className="w-4 h-4 text-slate-400 absolute left-3 top-3" />
-                <input
-                  type="time"
-                  value={endTime}
-                  onChange={(e) => setEndTime(e.target.value)}
-                  step="900" // 15-minute intervals
-                  className="w-full border border-slate-200 rounded-xl pl-10 pr-3 py-2 text-sm text-slate-800 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 bg-white"
-                />
+            {/* Dynamic Time Validation & Room Availability Live Pill */}
+            {!isRecurring && (
+              <div className="space-y-2">
+                {timeToMinutes(endTime) <= timeToMinutes(startTime) ? (
+                  <div className="p-2.5 bg-amber-50 border border-amber-200 text-amber-900 rounded-xl text-xs flex items-center gap-2">
+                    <AlertTriangle className="w-4 h-4 text-amber-600 shrink-0" />
+                    <span className="font-semibold">End time must be later than the start time.</span>
+                  </div>
+                ) : isConflict ? (
+                  <div className="p-3 bg-rose-50/90 border border-rose-200 rounded-xl text-xs text-rose-950 space-y-2 animate-in fade-in duration-150">
+                    <div className="flex items-start justify-between gap-2">
+                      <div className="flex items-center gap-1.5 font-bold">
+                        <AlertTriangle className="w-4 h-4 text-rose-600 shrink-0" />
+                        <span>Overlap with {detailedOverlapList.length} existing {detailedOverlapList.length === 1 ? 'reservation' : 'reservations'}:</span>
+                      </div>
+                      <span className="text-[10px] font-mono bg-rose-200 text-rose-900 px-2 py-0.5 rounded font-bold uppercase shrink-0">
+                        Slot Unavailable
+                      </span>
+                    </div>
+
+                    <div className="space-y-1">
+                      {detailedOverlapList.map((overlap) => (
+                        <div
+                          key={overlap.booking.id}
+                          className="flex items-center justify-between text-[11px] bg-white/90 px-2.5 py-1.5 rounded-lg border border-rose-200/80 font-medium text-slate-700"
+                        >
+                          <span className="truncate max-w-[220px]">
+                            "{overlap.booking.title || 'Reserved'}" ({overlap.booking.hostName || overlap.booking.hostEmail})
+                          </span>
+                          <span className="font-mono text-rose-700 bg-rose-100 px-1.5 py-0.5 rounded font-bold shrink-0">
+                            Booked: {overlap.booking.startTime} - {overlap.booking.endTime} (Overlap: {overlap.overlapStart}-{overlap.overlapEnd})
+                          </span>
+                        </div>
+                      ))}
+                    </div>
+
+                    {suggestedFreeSlots.length > 0 && (
+                      <div className="pt-1 flex items-center gap-1.5 flex-wrap">
+                        <span className="text-[10px] font-bold text-rose-900 uppercase font-mono">Suggested Open Slots:</span>
+                        {suggestedFreeSlots.map((slot, sIdx) => (
+                          <button
+                            key={sIdx}
+                            type="button"
+                            onClick={() => {
+                              setStartTime(slot.start);
+                              setEndTime(slot.end);
+                            }}
+                            className="text-[10px] font-bold bg-white hover:bg-emerald-50 text-emerald-700 border border-emerald-300 hover:border-emerald-400 px-2 py-0.5 rounded-md transition-colors cursor-pointer flex items-center gap-1 shadow-2xs"
+                          >
+                            <Clock className="w-2.5 h-2.5" />
+                            <span>{slot.start} – {slot.end}</span>
+                          </button>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                ) : (
+                  <div className="p-2.5 bg-emerald-50/80 border border-emerald-200 text-emerald-950 rounded-xl text-xs flex items-center justify-between">
+                    <div className="flex items-center gap-1.5 font-semibold">
+                      <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
+                      <span>{currentRoom?.name || 'Selected room'} is 100% available for this slot ({startTime} – {endTime})</span>
+                    </div>
+                    <span className="text-[10px] font-mono font-bold bg-emerald-100 text-emerald-900 px-2 py-0.5 rounded uppercase">
+                      Free Slot
+                    </span>
+                  </div>
+                )}
+
+                {/* Interactive Daily Room Timeline Strip (08:00 - 19:00) */}
+                <div className="p-3 bg-slate-50 border border-slate-200/90 rounded-xl space-y-1.5">
+                  <div className="flex items-center justify-between text-[10px] font-bold font-mono text-slate-500 uppercase tracking-wider">
+                    <span className="flex items-center gap-1">
+                      <Clock className="w-3 h-3 text-slate-400" />
+                      <span>{currentRoom?.name} Daily Schedule ({formatFriendlyDate(date)})</span>
+                    </span>
+                    <span>08:00 – 19:00 Working Hours</span>
+                  </div>
+
+                  {/* Visual Bar Track */}
+                  <div className="relative w-full h-8 bg-slate-200 rounded-lg overflow-hidden border border-slate-300">
+                    {/* Background Hour Grid Lines */}
+                    {[0, 120, 240, 360, 480, 600].map((minsOffset) => (
+                      <div
+                        key={minsOffset}
+                        className="absolute top-0 bottom-0 border-r border-slate-300/80 pointer-events-none"
+                        style={{ left: `${(minsOffset / 660) * 100}%` }}
+                      />
+                    ))}
+
+                    {/* Existing Booked Slots on this Room */}
+                    {currentRoomDayBookings.map((b) => {
+                      const bStart = timeToMinutes(b.startTime);
+                      const bEnd = timeToMinutes(b.endTime);
+                      const left = Math.max(0, Math.min(100, ((bStart - 480) / 660) * 100));
+                      const width = Math.max(2, Math.min(100 - left, ((bEnd - bStart) / 660) * 100));
+                      return (
+                        <div
+                          key={b.id}
+                          title={`Booked: ${b.title || 'Reserved'} (${b.startTime} - ${b.endTime})`}
+                          className="absolute top-1 bottom-1 bg-slate-700 text-white rounded text-[9px] font-mono px-1 flex items-center justify-center truncate z-10 border border-slate-800 shadow-xs"
+                          style={{ left: `${left}%`, width: `${width}%` }}
+                        >
+                          <span className="truncate opacity-90">{b.startTime}-{b.endTime}</span>
+                        </div>
+                      );
+                    })}
+
+                    {/* Current User Selection Preview Block */}
+                    {timeToMinutes(endTime) > timeToMinutes(startTime) && (
+                      (() => {
+                        const selStart = timeToMinutes(startTime);
+                        const selEnd = timeToMinutes(endTime);
+                        const left = Math.max(0, Math.min(100, ((selStart - 480) / 660) * 100));
+                        const width = Math.max(2, Math.min(100 - left, ((selEnd - selStart) / 660) * 100));
+                        return (
+                          <div
+                            className={`absolute top-0 bottom-0 rounded-md z-20 transition-all border-2 flex items-center justify-center text-[9px] font-black font-mono shadow-sm ${
+                              isConflict
+                                ? 'bg-rose-500/50 border-rose-600 text-rose-950 backdrop-blur-xs animate-pulse'
+                                : 'bg-emerald-500/40 border-emerald-600 text-emerald-950'
+                            }`}
+                            style={{ left: `${left}%`, width: `${width}%` }}
+                          >
+                            <span className="truncate px-1 bg-white/90 rounded text-[9px] py-0.2 shadow-2xs">
+                              {isConflict ? '⚠️ COLLISION' : '✓ SELECTED'}
+                            </span>
+                          </div>
+                        );
+                      })()
+                    )}
+                  </div>
+
+                  {/* Time Legend Markers */}
+                  <div className="flex justify-between text-[9px] font-mono text-slate-400 px-0.5">
+                    <span>08:00</span>
+                    <span>10:00</span>
+                    <span>12:00</span>
+                    <span>14:00</span>
+                    <span>16:00</span>
+                    <span>18:00</span>
+                    <span>19:00</span>
+                  </div>
+                </div>
               </div>
-            </div>
+            )}
           </div>
 
           {/* ========================================================================= */}

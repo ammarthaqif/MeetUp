@@ -5,7 +5,7 @@ import {
   ShieldCheck, History, Download, FileSpreadsheet, FileText,
   Briefcase, Upload, Calendar
 } from 'lucide-react';
-import { Office, Room, Booking, ApprovedUser, AccessKey, AuditLog, Tenant, BlockedDate } from '../types';
+import { Office, Room, Booking, ApprovedUser, AccessKey, AuditLog, Tenant, BlockedDate, ActivePresenceUser } from '../types';
 import { AdminAccessControl } from './AdminAccessControl';
 import { AdminAuditLogs } from './AdminAuditLogs';
 import { AdminTenantsTab } from './AdminTenantsTab';
@@ -26,6 +26,7 @@ interface AdminPanelProps {
   adminEmail: string;
   isMasterAdmin?: boolean;
   blockedDates?: BlockedDate[];
+  activeUsers?: ActivePresenceUser[];
   onSaveTenant?: (
     tenantData: Tenant,
     extraConfig?: {
@@ -72,6 +73,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
   adminEmail,
   isMasterAdmin = false,
   blockedDates = [],
+  activeUsers = [],
   onSaveTenant,
   onDeleteTenant,
   onGenerateTenantToken,
@@ -1084,6 +1086,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
             tenants={tenants}
             currentTenant={currentTenant}
             isMasterAdmin={isMasterAdmin}
+            activeUsers={activeUsers}
             onSaveTenant={onSaveTenant}
             onAddApprovedUser={onAddApprovedUser}
             onBulkAddApprovedUsers={onBulkAddApprovedUsers}
