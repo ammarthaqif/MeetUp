@@ -98,6 +98,71 @@ export const RoomFinderModal: React.FC<RoomFinderModalProps> = ({
     });
   }, [rooms, minCapacity, selectedFloor, requiredAmenities]);
 
+  // Unique floors in this client office
+  const uniqueFloors = useMemo(() => {
+    const set = new Set<number>();
+    rooms.forEach(r => set.add(r.floor));
+    return Array.from(set).sort((a, b) => a - b);
+  }, [rooms]);
+
+  // Floor availability map for the current input date & time
+  const floorAvailabilityMap = useMemo(() => {
+    const map = new Map<number, { availableCount: number; totalCount: number; availableRooms: Room[] }>();
+    uniqueFloors.forEach(flr => {
+      const flrRooms = rooms.filter(r => {
+        if (r.floor !== flr) return false;
+        if (minCapacity > 0 && r.capacity < minCapacity) return false;
+        if (requiredAmenities.length > 0) {
+          const hasAll = requiredAmenities.every(req => 
+            r.amenities.some(a => a.toLowerCase().includes(req.toLowerCase()))
+          );
+          if (!hasAll) return false;
+        }
+        return true;
+      });
+
+      const freeRooms = flrRooms.filter(r => 
+        isRoomAvailable(r.id, selectedDate, startTime, endTime, bookings)
+      );
+
+      map.set(flr, {
+        availableCount: freeRooms.length,
+        totalCount: flrRooms.length,
+        availableRooms: freeRooms,
+      });
+    });
+    return map;
+  }, [uniqueFloors, rooms, minCapacity, requiredAmenities, selectedDate, startTime, endTime, bookings]);
+
+  // Total free rooms across all floors of this office for the selected date & time
+  const totalFreeRoomsAllFloors = useMemo(() => {
+    let count = 0;
+    floorAvailabilityMap.forEach(f => {
+      count += f.availableCount;
+    });
+    return count;
+  }, [floorAvailabilityMap]);
+
+  // Available rooms across other floors in this office when a specific floor is selected
+  const availableRoomsOnOtherFloors = useMemo(() => {
+    if (selectedFloor === 'all' || !selectedDate) return [];
+    const otherRooms = rooms.filter(r => {
+      if (r.floor === selectedFloor) return false;
+      if (minCapacity > 0 && r.capacity < minCapacity) return false;
+      if (requiredAmenities.length > 0) {
+        const hasAll = requiredAmenities.every(req => 
+          r.amenities.some(a => a.toLowerCase().includes(req.toLowerCase()))
+        );
+        if (!hasAll) return false;
+      }
+      return true;
+    });
+
+    return otherRooms.filter(r => 
+      isRoomAvailable(r.id, selectedDate, startTime, endTime, bookings)
+    );
+  }, [rooms, selectedFloor, selectedDate, minCapacity, requiredAmenities, startTime, endTime, bookings]);
+
   // -------------------------------------------------------------
   // Availability Scan Engine
   // -------------------------------------------------------------
@@ -510,13 +575,71 @@ export const RoomFinderModal: React.FC<RoomFinderModalProps> = ({
           {/* SEARCH RESULTS & RECOMMENDATION MATRIX */}
           {/* ------------------------------------------------------------- */}
 
+          {/* Floor Availability Quick Bar */}
+          {uniqueFloors.length > 1 && (
+            <div className="space-y-1.5 pt-1">
+              <div className="text-[10px] font-mono font-bold uppercase text-slate-500 flex items-center justify-between">
+                <span>Office Floor Availability ({startTime} – {endTime})</span>
+                <span className="text-indigo-600 font-bold">{totalFreeRoomsAllFloors} Total Spaces Open</span>
+              </div>
+              <div className="flex items-center gap-1.5 overflow-x-auto pb-1">
+                <button
+                  type="button"
+                  onClick={() => setSelectedFloor('all')}
+                  className={`text-xs font-bold px-3 py-1.5 rounded-xl border transition-all shrink-0 flex items-center gap-1.5 cursor-pointer ${
+                    selectedFloor === 'all'
+                      ? 'bg-indigo-600 text-white border-indigo-600 shadow-xs'
+                      : 'bg-white text-slate-700 border-slate-200 hover:bg-slate-50'
+                  }`}
+                >
+                  <Building2 className="w-3.5 h-3.5" />
+                  <span>All Floors</span>
+                  <span className={`text-[10px] font-mono px-1.5 py-0.2 rounded-full font-bold ${
+                    selectedFloor === 'all' ? 'bg-white/20 text-white' : 'bg-indigo-50 text-indigo-700'
+                  }`}>
+                    {totalFreeRoomsAllFloors} Open
+                  </span>
+                </button>
+                {uniqueFloors.map(flr => {
+                  const info = floorAvailabilityMap.get(flr);
+                  const isSelected = selectedFloor === flr;
+                  const freeCount = info?.availableCount || 0;
+
+                  return (
+                    <button
+                      key={flr}
+                      type="button"
+                      onClick={() => setSelectedFloor(flr)}
+                      className={`text-xs font-bold px-3 py-1.5 rounded-xl border transition-all shrink-0 flex items-center gap-1.5 cursor-pointer ${
+                        isSelected
+                          ? 'bg-indigo-600 text-white border-indigo-600 shadow-xs'
+                          : 'bg-white text-slate-700 border-slate-200 hover:bg-slate-50'
+                      }`}
+                    >
+                      <span>Level 0{flr}</span>
+                      <span className={`text-[10px] font-mono px-1.5 py-0.2 rounded-full font-bold ${
+                        isSelected
+                          ? 'bg-white/20 text-white'
+                          : freeCount > 0
+                          ? 'bg-emerald-100 text-emerald-800'
+                          : 'bg-slate-100 text-slate-400'
+                      }`}>
+                        {freeCount} Open
+                      </span>
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+
           {/* Mode 1: Defined Specific Date Results */}
           {dateMode === 'specific' && (
             <div className="space-y-4">
               
               {/* Outcome A: Rooms ARE Available on this date */}
               {availableRoomsOnSelectedDate.length > 0 ? (
-                <div className="space-y-3">
+                <div className="space-y-4">
                   
                   {/* Status Banner */}
                   <div className="bg-emerald-50 border border-emerald-200 rounded-2xl p-3.5 flex items-start justify-between gap-3 text-emerald-950">
@@ -527,7 +650,7 @@ export const RoomFinderModal: React.FC<RoomFinderModalProps> = ({
                       <div>
                         <div className="flex items-center gap-2">
                           <h4 className="text-xs font-black uppercase tracking-tight text-emerald-900">
-                            Available Now: {availableRoomsOnSelectedDate.length} {availableRoomsOnSelectedDate.length === 1 ? 'Space' : 'Spaces'} Found
+                            Available Now: {availableRoomsOnSelectedDate.length} {availableRoomsOnSelectedDate.length === 1 ? 'Space' : 'Spaces'} Found {selectedFloor !== 'all' ? `on Floor 0${selectedFloor}` : 'Across All Floors'}
                           </h4>
                           <span className="bg-emerald-200/60 text-emerald-800 text-[10px] font-bold px-2 py-0.2 rounded font-mono">
                             Ready to Book
@@ -598,6 +721,53 @@ export const RoomFinderModal: React.FC<RoomFinderModalProps> = ({
                     ))}
                   </div>
 
+                  {/* Also Available on Other Floors in this Office */}
+                  {selectedFloor !== 'all' && availableRoomsOnOtherFloors.length > 0 && (
+                    <div className="bg-slate-50 border border-slate-200 rounded-2xl p-4 space-y-3 mt-4">
+                      <div className="flex items-center justify-between">
+                        <div className="flex items-center gap-2">
+                          <Building2 className="w-4 h-4 text-indigo-600" />
+                          <h4 className="font-sans font-bold text-xs text-slate-800 uppercase tracking-tight">
+                            Also Available on Other Floors of this Office ({availableRoomsOnOtherFloors.length} Spaces)
+                          </h4>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => setSelectedFloor('all')}
+                          className="text-[10px] font-bold text-indigo-600 hover:text-indigo-800 underline cursor-pointer"
+                        >
+                          View All Floors
+                        </button>
+                      </div>
+
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                        {availableRoomsOnOtherFloors.map(r => (
+                          <div key={r.id} className="bg-white rounded-xl p-3 border border-slate-200 flex items-center justify-between shadow-2xs hover:border-indigo-300 transition-all">
+                            <div>
+                              <div className="flex items-center gap-1.5">
+                                <span className="text-[9px] font-bold font-mono px-1.5 py-0.5 bg-indigo-100 text-indigo-800 rounded">
+                                  Lvl 0{r.floor}
+                                </span>
+                                <span className="text-xs font-bold text-slate-800">{r.name}</span>
+                              </div>
+                              <div className="text-[10px] text-slate-500 font-mono mt-0.5">{r.capacity} Seats • {r.amenities.slice(0, 2).join(', ')}</div>
+                            </div>
+                            <button
+                              type="button"
+                              onClick={() => {
+                                onProceedWithBooking(r, selectedDate, startTime, endTime);
+                                onClose();
+                              }}
+                              className="bg-indigo-600 hover:bg-indigo-700 text-white font-bold text-[10px] uppercase px-3 py-1.5 rounded-lg transition-colors cursor-pointer shrink-0 ml-2"
+                            >
+                              Book Space
+                            </button>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+
                 </div>
               ) : (
                 
@@ -610,14 +780,75 @@ export const RoomFinderModal: React.FC<RoomFinderModalProps> = ({
                       <AlertCircle className="w-5 h-5 text-rose-600 shrink-0 mt-0.5" />
                       <div>
                         <h4 className="text-xs font-black uppercase tracking-tight text-rose-900">
-                          No Rooms Available on {formatFriendlyDate(selectedDate)} for {startTime} – {endTime}
+                          No Rooms Available {selectedFloor !== 'all' ? `on Level 0${selectedFloor}` : 'in this office'} on {formatFriendlyDate(selectedDate)} for {startTime} – {endTime}
                         </h4>
                         <p className="text-[11px] text-rose-700 mt-0.5">
-                          All rooms meeting your criteria are already booked for this time window. See smart recommendations below:
+                          {selectedFloor !== 'all' && availableRoomsOnOtherFloors.length > 0
+                            ? `Level 0${selectedFloor} is busy for this time, but rooms are open on other floors below!`
+                            : 'All matching rooms are booked for this time window. See smart recommendations below:'}
                         </p>
                       </div>
                     </div>
                   </div>
+
+                  {/* Smart Cross-Floor Recommendation when current floor is booked out */}
+                  {selectedFloor !== 'all' && availableRoomsOnOtherFloors.length > 0 && (
+                    <div className="bg-gradient-to-br from-indigo-50/90 to-emerald-50/90 border border-indigo-200 rounded-2xl p-4 space-y-3">
+                      <div className="flex items-start justify-between gap-3">
+                        <div className="flex items-center gap-2">
+                          <Sparkles className="w-4.5 h-4.5 text-indigo-600" />
+                          <div>
+                            <h4 className="font-sans font-bold text-xs text-indigo-950 uppercase tracking-tight">
+                              Smart Cross-Floor Recommendation ({availableRoomsOnOtherFloors.length} Spaces Open)
+                            </h4>
+                            <p className="text-[11px] text-indigo-800 mt-0.5">
+                              Available right now on other floors of the same office for <span className="font-bold">{startTime} – {endTime}</span>:
+                            </p>
+                          </div>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => setSelectedFloor('all')}
+                          className="text-[10px] font-bold font-mono bg-indigo-600 hover:bg-indigo-700 text-white px-2.5 py-1 rounded-md transition-colors cursor-pointer shrink-0"
+                        >
+                          View All Floors
+                        </button>
+                      </div>
+
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+                        {availableRoomsOnOtherFloors.map(room => (
+                          <div
+                            key={room.id}
+                            className="bg-white rounded-xl p-3.5 border border-indigo-100 shadow-2xs hover:shadow transition-all flex flex-col justify-between space-y-2.5"
+                          >
+                            <div>
+                              <div className="flex items-center justify-between gap-2 mb-1">
+                                <span className="text-[9px] font-bold font-mono px-2 py-0.5 bg-indigo-100 text-indigo-800 rounded">
+                                  LEVEL 0{room.floor}
+                                </span>
+                                <span className="text-[10px] font-bold font-mono text-slate-600 bg-slate-100 px-1.5 py-0.5 rounded">
+                                  {room.capacity} Seats
+                                </span>
+                              </div>
+                              <h5 className="font-sans font-black text-slate-900 text-xs">{room.name}</h5>
+                              <p className="text-[10px] text-slate-500 line-clamp-1 mt-0.5">{room.description}</p>
+                            </div>
+                            <button
+                              type="button"
+                              onClick={() => {
+                                onProceedWithBooking(room, selectedDate, startTime, endTime);
+                                onClose();
+                              }}
+                              className="w-full bg-indigo-600 hover:bg-indigo-700 text-white font-extrabold text-[11px] uppercase py-2 rounded-lg transition-all flex items-center justify-center gap-1 cursor-pointer"
+                            >
+                              <span>Book {room.name} (Lvl {room.floor})</span>
+                              <ArrowRight className="w-3 h-3" />
+                            </button>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
 
                   {/* Recommendation 1: Earliest Available Date */}
                   {earliestAvailableResult && (

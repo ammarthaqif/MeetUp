@@ -2,7 +2,7 @@ import React, { useState, useEffect, useMemo } from 'react';
 import { 
   X, Calendar, Clock, Info, UserCheck, AlertTriangle, Users, Mail, Plus, Trash2, 
   Lock, ShieldCheck, ShieldAlert, Layers, Sparkles, ArrowRight, CheckCircle2,
-  Repeat, CalendarRange, Check, AlertCircle, RefreshCw, ChevronRight, Zap
+  Repeat, CalendarRange, Check, AlertCircle, RefreshCw, ChevronRight, Zap, Building2, ChevronDown, ChevronUp
 } from 'lucide-react';
 import { Room, Booking, BlockedDate, Tenant } from '../types';
 import { 
@@ -75,6 +75,8 @@ export const BookingModal: React.FC<BookingModalProps> = ({
   const [directCollisions, setDirectCollisions] = useState<Booking[]>([]);
   const [floorConcurrentBookings, setFloorConcurrentBookings] = useState<{ booking: Booking; room: Room }[]>([]);
   const [alternativeAvailableRoomsOnFloor, setAlternativeAvailableRoomsOnFloor] = useState<Room[]>([]);
+  const [alternativeAvailableRoomsOtherFloors, setAlternativeAvailableRoomsOtherFloors] = useState<{ floor: number; rooms: Room[] }[]>([]);
+  const [showCrossFloorExplorer, setShowCrossFloorExplorer] = useState(false);
 
   // Ownership check: user can only edit/cancel if they are the creator or the verified admin
   const isOwner = !editingBooking || (
@@ -349,6 +351,49 @@ export const BookingModal: React.FC<BookingModalProps> = ({
     return viableRooms.sort((a, b) => a.conflictCount - b.conflictCount);
   }, [isRecurring, includedDates, startTime, endTime, bookings, editingBooking, rooms, roomId, activeIncludedConflicts.length]);
 
+  // Group all office rooms by floor for organized cross-floor selection
+  const roomsByFloor = useMemo(() => {
+    const map = new Map<number, Room[]>();
+    rooms.forEach(r => {
+      const list = map.get(r.floor) || [];
+      list.push(r);
+      map.set(r.floor, list);
+    });
+    return Array.from(map.entries()).sort(([a], [b]) => a - b);
+  }, [rooms]);
+
+  // Real-time cross-floor availability breakdown across all floors of the office
+  const crossFloorAvailabilitySummary = useMemo(() => {
+    if (!date || !startTime || !endTime || rooms.length === 0) return [];
+    const startMin = timeToMinutes(startTime);
+    const endMin = timeToMinutes(endTime);
+    if (endMin <= startMin) return [];
+
+    const currentRoomObj = rooms.find(r => r.id === roomId);
+
+    return roomsByFloor.map(([floorNum, floorRooms]) => {
+      const availableRooms: Room[] = [];
+      const busyRooms: Room[] = [];
+
+      floorRooms.forEach(r => {
+        const isFree = isRoomAvailable(r.id, date, startTime, endTime, bookings, editingBooking?.id);
+        if (isFree) {
+          availableRooms.push(r);
+        } else {
+          busyRooms.push(r);
+        }
+      });
+
+      return {
+        floor: floorNum,
+        totalRooms: floorRooms.length,
+        availableRooms,
+        busyRooms,
+        isCurrentFloor: currentRoomObj?.floor === floorNum,
+      };
+    });
+  }, [date, startTime, endTime, rooms, roomsByFloor, bookings, editingBooking, roomId]);
+
   // -------------------------------------------------------------------------
   // Holiday & Company Replacement Leave Awareness Engine
   // -------------------------------------------------------------------------
@@ -398,6 +443,7 @@ export const BookingModal: React.FC<BookingModalProps> = ({
       setDirectCollisions([]);
       setFloorConcurrentBookings([]);
       setAlternativeAvailableRoomsOnFloor([]);
+      setAlternativeAvailableRoomsOtherFloors([]);
       return;
     } else {
       setErrorMessage('');
@@ -440,6 +486,36 @@ export const BookingModal: React.FC<BookingModalProps> = ({
 
       setFloorConcurrentBookings(floorCollisions);
       setAlternativeAvailableRoomsOnFloor(alternativeRooms);
+
+      // Check other floors in this same office for cross-floor availability recommendations
+      const otherFloorRooms = rooms.filter(r => r.floor !== currentFloor);
+      const otherFloorsMap = new Map<number, Room[]>();
+
+      otherFloorRooms.forEach(oRoom => {
+        const isFree = isRoomAvailable(
+          oRoom.id,
+          date,
+          startTime,
+          endTime,
+          bookings,
+          editingBooking?.id
+        );
+        if (isFree) {
+          const list = otherFloorsMap.get(oRoom.floor) || [];
+          list.push(oRoom);
+          otherFloorsMap.set(oRoom.floor, list);
+        }
+      });
+
+      const groupedOtherFloors = Array.from(otherFloorsMap.entries())
+        .sort(([fA], [fB]) => fA - fB)
+        .map(([flr, flrRooms]) => ({ floor: flr, rooms: flrRooms }));
+
+      setAlternativeAvailableRoomsOtherFloors(groupedOtherFloors);
+    } else {
+      setFloorConcurrentBookings([]);
+      setAlternativeAvailableRoomsOnFloor([]);
+      setAlternativeAvailableRoomsOtherFloors([]);
     }
 
     if (isRecurring && !editingBooking) {
@@ -843,7 +919,7 @@ export const BookingModal: React.FC<BookingModalProps> = ({
                 <div className="pt-2 border-t border-rose-200/60">
                   <div className="text-[10px] font-bold uppercase tracking-wider text-rose-800 font-mono mb-1.5 flex items-center gap-1">
                     <Sparkles className="w-3 h-3 text-amber-600" />
-                    <span>Available Alternative Spaces on Level {currentRoom?.floor}:</span>
+                    <span>Available Alternative Spaces on Same Floor (Level {currentRoom?.floor}):</span>
                   </div>
                   <div className="flex flex-wrap gap-1.5">
                     {alternativeAvailableRoomsOnFloor.map((altRoom) => (
@@ -861,24 +937,67 @@ export const BookingModal: React.FC<BookingModalProps> = ({
                   </div>
                 </div>
               )}
+
+              {/* Smart Alternative Rooms on Other Floors in the Same Client Office */}
+              {alternativeAvailableRoomsOtherFloors.length > 0 && (
+                <div className="pt-2 border-t border-rose-200/60 space-y-1.5">
+                  <div className="text-[10px] font-bold uppercase tracking-wider text-indigo-900 font-mono flex items-center gap-1">
+                    <Building2 className="w-3 h-3 text-indigo-600" />
+                    <span>Available Spaces on Other Floors of this Office:</span>
+                  </div>
+                  <div className="space-y-1.5">
+                    {alternativeAvailableRoomsOtherFloors.map(({ floor, rooms: fRooms }) => (
+                      <div key={floor} className="flex items-center gap-1.5 flex-wrap bg-white/70 p-1.5 rounded-lg border border-indigo-100">
+                        <span className="text-[9px] font-mono font-bold px-1.5 py-0.5 bg-indigo-100 text-indigo-800 rounded">
+                          Level 0{floor}
+                        </span>
+                        {fRooms.map(altRoom => (
+                          <button
+                            type="button"
+                            key={altRoom.id}
+                            onClick={() => setRoomId(altRoom.id)}
+                            className="px-2.5 py-1 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg text-xs font-bold transition-all shadow-2xs cursor-pointer flex items-center gap-1"
+                          >
+                            <CheckCircle2 className="w-3 h-3 text-emerald-300" />
+                            <span>Switch to {altRoom.name}</span>
+                            <span className="text-[10px] text-indigo-200">({altRoom.capacity} pax)</span>
+                          </button>
+                        ))}
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
             </div>
           )}
 
           {/* Room Selection and Base Date */}
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <div>
-              <label className="block text-xs font-bold text-slate-600 uppercase tracking-wider mb-2 font-mono">
-                Meeting Room
+              <label className="block text-xs font-bold text-slate-600 uppercase tracking-wider mb-2 font-mono flex items-center justify-between">
+                <span>Meeting Room</span>
+                {currentRoom && (
+                  <span className="text-[10px] text-indigo-600 font-bold">
+                    Level 0{currentRoom.floor} • Cap {currentRoom.capacity}
+                  </span>
+                )}
               </label>
               <select
                 value={roomId}
                 onChange={(e) => setRoomId(e.target.value)}
                 className="w-full border border-slate-200 rounded-xl px-3 py-2 text-sm text-slate-800 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 bg-white cursor-pointer"
               >
-                {rooms.map(r => (
-                  <option key={r.id} value={r.id}>
-                    {r.name} (Lvl {r.floor} • Cap {r.capacity})
-                  </option>
+                {roomsByFloor.map(([floorNum, floorRooms]) => (
+                  <optgroup key={floorNum} label={`Floor 0${floorNum} — ${floorRooms.length} Spaces`}>
+                    {floorRooms.map(r => {
+                      const isFree = isRoomAvailable(r.id, date, startTime, endTime, bookings, editingBooking?.id);
+                      return (
+                        <option key={r.id} value={r.id}>
+                          {r.name} (Lvl {r.floor} • Cap {r.capacity}) — {isFree ? '✓ Available' : '⚠️ Busy'}
+                        </option>
+                      );
+                    })}
+                  </optgroup>
                 ))}
               </select>
             </div>
@@ -903,6 +1022,136 @@ export const BookingModal: React.FC<BookingModalProps> = ({
               </div>
             </div>
           </div>
+
+          {/* Cross-Floor Availability Matrix & Multi-Floor Quick Booking Explorer */}
+          {crossFloorAvailabilitySummary.length > 1 && (
+            <div className="bg-slate-50 border border-slate-200 rounded-xl p-3 space-y-2">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-1.5">
+                  <Building2 className="w-3.5 h-3.5 text-indigo-600" />
+                  <span className="text-xs font-bold text-slate-800 font-mono uppercase tracking-wider">
+                    Office Cross-Floor Availability
+                  </span>
+                  <span className="text-[10px] text-slate-500 font-mono">
+                    ({startTime} – {endTime})
+                  </span>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setShowCrossFloorExplorer(!showCrossFloorExplorer)}
+                  className="text-[10px] font-bold text-indigo-600 hover:text-indigo-800 flex items-center gap-0.5 cursor-pointer"
+                >
+                  <span>{showCrossFloorExplorer ? 'Hide Details' : 'View All Floors'}</span>
+                  {showCrossFloorExplorer ? <ChevronUp className="w-3 h-3" /> : <ChevronDown className="w-3 h-3" />}
+                </button>
+              </div>
+
+              {/* Quick Floor Status Pills */}
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-1.5">
+                {crossFloorAvailabilitySummary.map((fSummary) => {
+                  const hasAvailable = fSummary.availableRooms.length > 0;
+                  const isCurrent = fSummary.isCurrentFloor;
+
+                  return (
+                    <div
+                      key={fSummary.floor}
+                      className={`p-2 rounded-lg border text-xs flex flex-col justify-between transition-all ${
+                        isCurrent
+                          ? 'bg-indigo-50/80 border-indigo-300 ring-1 ring-indigo-300'
+                          : hasAvailable
+                          ? 'bg-white border-emerald-200 hover:border-emerald-300'
+                          : 'bg-slate-100/70 border-slate-200 text-slate-400'
+                      }`}
+                    >
+                      <div className="flex items-center justify-between mb-1">
+                        <span className="font-bold font-mono text-[10px] text-slate-700">
+                          Lvl 0{fSummary.floor}
+                        </span>
+                        {isCurrent && (
+                          <span className="text-[8px] font-mono bg-indigo-600 text-white px-1 rounded uppercase font-bold">
+                            Selected
+                          </span>
+                        )}
+                      </div>
+                      <div className="flex items-center justify-between text-[10px]">
+                        <span className={hasAvailable ? 'text-emerald-700 font-bold' : 'text-slate-500'}>
+                          {fSummary.availableRooms.length} / {fSummary.totalRooms} Free
+                        </span>
+                        {hasAvailable && !isCurrent && (
+                          <button
+                            type="button"
+                            onClick={() => {
+                              if (fSummary.availableRooms.length > 0) {
+                                setRoomId(fSummary.availableRooms[0].id);
+                              }
+                            }}
+                            className="text-[9px] font-bold text-indigo-600 hover:text-indigo-800 underline cursor-pointer"
+                            title={`Switch to first available room on Level ${fSummary.floor}`}
+                          >
+                            Switch
+                          </button>
+                        )}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+
+              {/* Detailed Breakdown by Floor when expanded */}
+              {showCrossFloorExplorer && (
+                <div className="pt-2 border-t border-slate-200 space-y-2 mt-2">
+                  <div className="text-[10px] font-mono font-bold uppercase text-slate-500">
+                    Spaces on other floors for {date} from {startTime} to {endTime}:
+                  </div>
+                  <div className="space-y-2 max-h-44 overflow-y-auto pr-1">
+                    {crossFloorAvailabilitySummary.map((fSummary) => (
+                      <div key={fSummary.floor} className="bg-white p-2 rounded-lg border border-slate-200 text-xs">
+                        <div className="flex items-center justify-between mb-1.5">
+                          <span className="font-bold text-slate-800 flex items-center gap-1">
+                            <span className="font-mono text-xs text-indigo-700 bg-indigo-50 px-1.5 py-0.5 rounded border border-indigo-100 font-bold">
+                              Level 0{fSummary.floor}
+                            </span>
+                            <span className="text-[10px] text-slate-500">
+                              ({fSummary.availableRooms.length} available out of {fSummary.totalRooms})
+                            </span>
+                          </span>
+                        </div>
+                        <div className="flex flex-wrap gap-1.5">
+                          {fSummary.availableRooms.map(r => (
+                            <button
+                              type="button"
+                              key={r.id}
+                              onClick={() => setRoomId(r.id)}
+                              className={`px-2 py-1 rounded text-[11px] font-medium transition-all flex items-center gap-1 cursor-pointer ${
+                                roomId === r.id
+                                  ? 'bg-indigo-600 text-white font-bold shadow-2xs'
+                                  : 'bg-emerald-50 text-emerald-800 hover:bg-emerald-100 border border-emerald-200'
+                              }`}
+                            >
+                              <CheckCircle2 className="w-3 h-3 text-emerald-500" />
+                              <span>{r.name}</span>
+                              <span className="text-[9px] opacity-75 font-mono">({r.capacity} pax)</span>
+                            </button>
+                          ))}
+                          {fSummary.busyRooms.map(r => (
+                            <span
+                              key={r.id}
+                              className="px-2 py-1 rounded text-[11px] font-medium bg-slate-100 text-slate-400 border border-slate-200 flex items-center gap-1 cursor-not-allowed opacity-60"
+                              title="Currently reserved for this time slot"
+                            >
+                              <AlertCircle className="w-3 h-3 text-slate-400" />
+                              <span>{r.name}</span>
+                              <span className="text-[9px] font-mono">(Busy)</span>
+                            </span>
+                          ))}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
 
           {/* Holiday / Replacement Leave Notification Banner (Single Date Mode) */}
           {!isRecurring && selectedDateHoliday && (
