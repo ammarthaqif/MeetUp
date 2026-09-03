@@ -146,12 +146,11 @@ export const TenantPortalGate: React.FC<TenantPortalGateProps> = ({
       // Reset rate limit counter on valid key
       resetRateLimit();
 
-      // Master Super Admin bypass or universal key
-      if (resolved.isSuperAdmin || resolved.key?.tenantId === 'ALL') {
+      // Universal Key
+      if (resolved.key?.tenantId === 'ALL') {
         const targetTenant = resolved.tenant || tenants[0] || DEFAULT_TENANTS[0];
-        setSuccessMsg(`Authenticated Master Administrator via ${resolved.token}`);
+        setSuccessMsg(`Authenticated Corporate Access via ${resolved.token}`);
         setIsVerifying(false);
-        onUnlockMasterAdmin(resolved.token);
         if (targetTenant) {
           onUnlockTenant(targetTenant, resolved.token, 'company_admin', resolved.office);
         }
@@ -168,10 +167,14 @@ export const TenantPortalGate: React.FC<TenantPortalGateProps> = ({
   };
 
   const handleLaunchSuperAdmin = () => {
+    if (!isSuperAdmin) {
+      setErrorMsg('Unauthorized: Master Platform Super Admin console requires authenticated Google administrator login.');
+      return;
+    }
     const defaultTenant = tenants[0];
-    onUnlockMasterAdmin('SUPERADMIN-AUTH');
+    onUnlockMasterAdmin('SUPERADMIN_SSO_VERIFIED');
     if (defaultTenant) {
-      onUnlockTenant(defaultTenant, 'SUPERADMIN-AUTH', 'company_admin');
+      onUnlockTenant(defaultTenant, 'SUPERADMIN_SSO_VERIFIED', 'company_admin');
     }
   };
 
@@ -449,18 +452,6 @@ export const TenantPortalGate: React.FC<TenantPortalGateProps> = ({
                       >
                         ACME-STAFF-101
                       </button>
-                      <button
-                        type="button"
-                        onClick={() => {
-                          resetRateLimit();
-                          setErrorMsg(null);
-                          setTokenInput('SUPERADMIN-AUTH');
-                          handleVerifyToken('SUPERADMIN-AUTH');
-                        }}
-                        className="px-2 py-1 rounded bg-amber-600/40 hover:bg-amber-600 text-amber-200 font-mono text-[10px] font-bold transition-all cursor-pointer"
-                      >
-                        SUPERADMIN-AUTH
-                      </button>
                     </div>
                   </div>
                 )}
@@ -494,30 +485,12 @@ export const TenantPortalGate: React.FC<TenantPortalGateProps> = ({
                 <div className="pt-3 border-t border-slate-800/80 space-y-2.5">
                   <div className="flex items-center justify-between text-[11px]">
                     <span className="text-slate-300 font-semibold flex items-center gap-1.5">
-                      <Sparkles className="w-3.5 h-3.5 text-amber-400" /> Demo Token Shortcuts:
+                      <Sparkles className="w-3.5 h-3.5 text-indigo-400" /> Company Token Presets:
                     </span>
-                    <span className="text-slate-500 font-mono text-[10px]">Click any token to unlock</span>
+                    <span className="text-slate-500 font-mono text-[10px]">Click any token to unlock workspace</span>
                   </div>
 
                   <div className="space-y-1.5">
-                    {/* Super Admin universal quick token */}
-                    <div className="p-2.5 rounded-xl bg-amber-500/10 border border-amber-500/30 flex items-center justify-between gap-2">
-                      <div className="flex items-center gap-2">
-                        <Crown className="w-3.5 h-3.5 text-amber-400" />
-                        <span className="text-xs font-bold text-amber-200">Master Platform Super Admin</span>
-                      </div>
-                      <button
-                        type="button"
-                        onClick={() => {
-                          setTokenInput('SUPERADMIN-AUTH');
-                          handleVerifyToken('SUPERADMIN-AUTH');
-                        }}
-                        className="px-2.5 py-1 rounded-lg bg-amber-500 hover:bg-amber-400 text-slate-950 font-mono text-[10px] font-bold transition-all cursor-pointer"
-                      >
-                        SUPERADMIN-AUTH
-                      </button>
-                    </div>
-
                     {/* Multi-Tenant Organization Tokens */}
                     <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
                       {tenants.slice(0, 4).map(t => {
@@ -687,8 +660,11 @@ export const TenantPortalGate: React.FC<TenantPortalGateProps> = ({
       </main>
 
       {/* Footer */}
-      <footer className="relative z-10 w-full max-w-7xl mx-auto px-6 py-4 text-center text-xs text-slate-500 border-t border-slate-900">
-        Workspace Matrix &bull; Multi-Tenant Enterprise Meeting Orchestrator &bull; Confidential Gateway
+      <footer className="relative z-10 w-full max-w-7xl mx-auto px-6 py-4 text-xs text-slate-500 border-t border-slate-900 flex flex-col sm:flex-row items-center justify-between gap-2">
+        <div>Workspace Matrix &bull; Multi-Tenant Enterprise Meeting Orchestrator &bull; Confidential Gateway</div>
+        <div className="text-slate-400">
+          Developed by <span className="text-slate-200 font-semibold">Ammar Thaqif</span>
+        </div>
       </footer>
     </div>
   );

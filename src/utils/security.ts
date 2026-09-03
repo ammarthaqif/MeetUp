@@ -288,43 +288,7 @@ export function resolveAccessTokenOrPasskey(
   const allTenantsList = Array.from(new Map([...DEFAULT_TENANTS, ...tenants].map(t => [t.id, t])).values());
   const primaryTenant = tenants[0] || DEFAULT_TENANTS[0];
 
-  // 1. MASTER PLATFORM SUPERADMIN KEYS & UNIVERSAL MASTER TOKENS
-  const isMasterExactToken = 
-    cleanInput === 'MASTER-PLATFORM-ADMIN-2026' ||
-    cleanInput === 'MASTER-ADMIN-2026' ||
-    cleanInput === 'SUPERADMIN-AUTH' ||
-    cleanInput === 'ADMIN-UNIVERSAL-2026' ||
-    cleanInput === 'SUPERADMIN' ||
-    cleanInput === 'SUPER-ADMIN' ||
-    cleanInput === 'SUPER_ADMIN' ||
-    cleanInput === 'MASTER' ||
-    cleanInput === 'PLATFORM-ADMIN';
-
-  if (isMasterExactToken) {
-    const masterKey: AccessKey = {
-      id: 'key-master-platform-admin-resolved',
-      tenantId: 'ALL',
-      token: cleanInput,
-      label: 'Master Platform Superadmin Universal Key',
-      role: 'company_admin',
-      active: true,
-      maxUses: 999999,
-      usedCount: 0,
-      createdAt: Date.now(),
-      createdBy: 'Master Authentication'
-    };
-    return {
-      valid: true,
-      key: masterKey,
-      tenant: primaryTenant,
-      isSuperAdmin: true,
-      role: 'company_admin',
-      token: cleanInput,
-      source: 'master_superadmin'
-    };
-  }
-
-  // 2. CHECK ALL SANITIZED ACCESS KEYS, STORED KEYS & DEFAULT KEYS
+  // 1. CHECK ALL SANITIZED ACCESS KEYS, STORED KEYS & DEFAULT KEYS
   const sanitizedKeys = healAndSanitizeAccessKeys(accessKeys, tenants);
   
   // Search in sanitizedKeys and DEFAULT_TENANT_ACCESS_KEYS
@@ -371,13 +335,13 @@ export function resolveAccessTokenOrPasskey(
       active: true,
     };
 
-    // Universal superadmin key
+    // Universal corporate key for all tenants if explicitly configured
     if (matchedKey.tenantId === 'ALL') {
       return {
         valid: true,
         key: activeKey,
         tenant: primaryTenant,
-        isSuperAdmin: true,
+        isSuperAdmin: false,
         role: activeKey.role || 'company_admin',
         token: activeKey.token,
         source: 'universal_key'

@@ -94,55 +94,6 @@ export const DEFAULT_TENANTS: Tenant[] = [
 ];
 
 export const DEFAULT_TENANT_ACCESS_KEYS: AccessKey[] = [
-  // Master Platform Superadmin & Universal Keys
-  {
-    id: 'key-master-platform-admin-2026',
-    tenantId: 'ALL',
-    token: 'MASTER-PLATFORM-ADMIN-2026',
-    label: 'Master Platform Superadmin Universal Key',
-    role: 'company_admin',
-    createdBy: 'Platform Administrator',
-    createdAt: 1704067200000,
-    maxUses: 999999,
-    usedCount: 0,
-    active: true,
-  },
-  {
-    id: 'key-master-admin-2026',
-    tenantId: 'ALL',
-    token: 'MASTER-ADMIN-2026',
-    label: 'Master Administrator Universal Key',
-    role: 'company_admin',
-    createdBy: 'Platform Administrator',
-    createdAt: 1704067200000,
-    maxUses: 999999,
-    usedCount: 0,
-    active: true,
-  },
-  {
-    id: 'key-superadmin-auth',
-    tenantId: 'ALL',
-    token: 'SUPERADMIN-AUTH',
-    label: 'Super Admin Direct Passkey Token',
-    role: 'company_admin',
-    createdBy: 'Platform Administrator',
-    createdAt: 1704067200000,
-    maxUses: 999999,
-    usedCount: 0,
-    active: true,
-  },
-  {
-    id: 'key-admin-universal',
-    tenantId: 'ALL',
-    token: 'ADMIN-UNIVERSAL-2026',
-    label: 'Universal Corporate Admin Key',
-    role: 'company_admin',
-    createdBy: 'Platform Administrator',
-    createdAt: 1704067200000,
-    maxUses: 999999,
-    usedCount: 0,
-    active: true,
-  },
   // Acme Global
   {
     id: 'key-acme-admin-1',

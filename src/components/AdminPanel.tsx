@@ -383,7 +383,7 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
             <Shield className="w-5 h-5" />
           </div>
           <div>
-            <div className="flex items-center gap-2">
+            <div className="flex items-center gap-2 flex-wrap">
               <h2 className="text-lg font-bold font-sans tracking-tight">
                 {isMasterAdmin ? 'Master Superadmin Console' : `${currentTenant?.name || 'Company'} Admin Console`}
               </h2>
@@ -393,6 +393,9 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
                   : 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/40'
               }`}>
                 {isMasterAdmin ? 'Super User' : 'Company Focal Admin'}
+              </span>
+              <span className="text-[10px] text-slate-400 bg-slate-800/90 px-2 py-0.5 rounded-md border border-slate-700 font-medium">
+                Developed by <span className="text-slate-200 font-bold">Ammar Thaqif</span>
               </span>
             </div>
             <p className="text-xs text-slate-400 font-mono">
@@ -1141,6 +1144,14 @@ export const AdminPanel: React.FC<AdminPanelProps> = ({
           triggerNotification('success', `Successfully imported ${importedDates.length} holiday/leave dates from .ics calendar.`);
         }}
       />
+
+      {/* Admin Panel Footer Signature */}
+      <div className="pt-6 border-t border-slate-800/80 flex flex-col sm:flex-row items-center justify-between gap-2 text-xs text-slate-500">
+        <div>Workspace Matrix Admin Suite &bull; {currentTenant?.name || 'Enterprise'} Console</div>
+        <div className="text-slate-400">
+          Developed by <span className="text-slate-200 font-semibold">Ammar Thaqif</span>
+        </div>
+      </div>
 
     </div>
   );

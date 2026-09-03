@@ -211,9 +211,9 @@ export default function App() {
   const [verifiedTokens, setVerifiedTokens] = useState<string[]>(() => {
     try {
       const saved = localStorage.getItem('office_sync_verified_tokens');
-      return saved ? JSON.parse(saved) : ['ACME-CORP-2025', 'MASTER-PLATFORM-ADMIN-2026'];
+      return saved ? JSON.parse(saved) : ['ACME-CORP-2025'];
     } catch {
-      return ['ACME-CORP-2025', 'MASTER-PLATFORM-ADMIN-2026'];
+      return ['ACME-CORP-2025'];
     }
   });
 
@@ -303,18 +303,8 @@ export default function App() {
   const isTokenCompanyAdmin = useMemo(() => {
     if (!tenantAccessToken || !activeTenant) return false;
     const cleanCurrent = cleanAndNormalizeToken(tenantAccessToken);
-    
-    // 1. Universal Super Admin bypass tokens
-    if (
-      cleanCurrent === 'SUPERADMIN-AUTH' ||
-      cleanCurrent === 'MASTER-PLATFORM-ADMIN-2026' ||
-      cleanCurrent === 'ADMIN-UNIVERSAL-2026' ||
-      cleanCurrent === 'MASTER-ADMIN-2026'
-    ) {
-      return true;
-    }
 
-    // 2. Check matched keys in stored accessKeys and DEFAULT_TENANT_ACCESS_KEYS strictly for activeTenant
+    // 1. Check matched keys in stored accessKeys and DEFAULT_TENANT_ACCESS_KEYS strictly for activeTenant
     const allKeysList = [...accessKeys, ...DEFAULT_TENANT_ACCESS_KEYS];
     const matchingKey = allKeysList.find(
       k => isTokenMatch(cleanCurrent, k.token) && (k.tenantId === activeTenant.id || k.tenantId === 'ALL')
@@ -323,7 +313,7 @@ export default function App() {
       return matchingKey.active !== false && matchingKey.role === 'company_admin';
     }
 
-    // 3. Dynamic tenant prefix check strictly matching activeTenant's code
+    // 2. Dynamic tenant prefix check strictly matching activeTenant's code
     const tenantPrefix = activeTenant.code.toUpperCase();
     if (
       (cleanCurrent.startsWith(`${tenantPrefix}-ADMIN`) || cleanCurrent.startsWith(`${tenantPrefix}-EXEC`)) &&
@@ -718,7 +708,10 @@ export default function App() {
   };
 
   const handleUnlockMasterAdmin = (token: string) => {
-    setTenantAccessToken('MASTER-PLATFORM-ADMIN-2026');
+    if (!isMasterAdmin) {
+      showNotification('error', 'Unauthorized: Master Platform Superadmin access requires sign-in with designated Google account.');
+      return;
+    }
     const primaryTenant = tenants[0] || DEFAULT_TENANTS[0];
     setActiveTenant(primaryTenant);
     
@@ -729,8 +722,8 @@ export default function App() {
     }
 
     logActivity({
-      action: 'TOKEN_ACCESS_GRANTED',
-      details: `Master Platform Administrator console activated with bypass key.`,
+      action: 'ADMIN_ACCESS_GRANTED',
+      details: `Master Platform Administrator console activated by ${user?.email || ADMIN_EMAIL}.`,
       tenantId: primaryTenant.id
     });
 
@@ -2653,6 +2646,10 @@ export default function App() {
               </button>
             </div>
 
+            <div className="text-center pt-1 text-[11px] text-slate-400">
+              Developed by <span className="text-slate-700 font-bold">Ammar Thaqif</span>
+            </div>
+
           </div>
         </div>
       ) : (
@@ -2663,10 +2660,16 @@ export default function App() {
           {/* Header Card with Date & View Mode Switcher */}
           <div className="flex flex-col md:flex-row items-stretch md:items-center justify-between gap-3 bg-white border border-slate-200 rounded-xl p-4 shadow-2xs">
             <div>
-              <h2 className="text-base font-bold font-sans text-slate-800 tracking-tight flex items-center gap-2 uppercase">
-                <Building2 className="w-4.5 h-4.5 text-indigo-600" />
-                Meeting Room Availability Matrix
-              </h2>
+              <div className="flex items-center gap-2.5 flex-wrap">
+                <h2 className="text-base font-bold font-sans text-slate-800 tracking-tight flex items-center gap-2 uppercase">
+                  <Building2 className="w-4.5 h-4.5 text-indigo-600" />
+                  Meeting Room Availability Matrix
+                </h2>
+                <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full bg-slate-100 border border-slate-200 text-[10px] font-semibold text-slate-600">
+                  <span>Developed by</span>
+                  <span className="font-bold text-slate-900">Ammar Thaqif</span>
+                </span>
+              </div>
               <p className="text-[11px] text-slate-500 font-sans mt-0.5">
                 Real-time schedules & availability across {activeOffice.name} spaces.
               </p>
@@ -2985,6 +2988,24 @@ export default function App() {
 
             </div>
           )}
+
+          {/* Web App Dashboard Signature & Footer */}
+          <footer id="dashboard-footer" className="mt-8 pt-6 pb-2 border-t border-slate-200/80 flex flex-col sm:flex-row items-center justify-between gap-3 text-xs text-slate-500">
+            <div className="flex items-center gap-2">
+              <span className="inline-block w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
+              <span className="font-semibold text-slate-700">{activeTenant.name}</span>
+              <span className="text-slate-300">•</span>
+              <span className="text-slate-500 font-mono text-[11px]">{activeOffice.name}</span>
+              <span className="text-slate-300">•</span>
+              <span className="text-slate-500 text-[11px]">Real-Time Workspace Matrix</span>
+            </div>
+            <div className="flex items-center gap-1.5 text-xs text-slate-600 font-medium">
+              <span>Developed by</span>
+              <span className="font-bold text-slate-900 bg-white border border-slate-200 shadow-2xs px-2.5 py-1 rounded-lg">
+                Ammar Thaqif
+              </span>
+            </div>
+          </footer>
 
         </main>
       )}
